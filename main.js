@@ -379,6 +379,7 @@ function main() {
         axesCamera.position.sub(controls.target); 
         axesCamera.position.setLength(10);
         axesCamera.lookAt(axesScene.position);
+        renderer.clearDepth();
         renderer.render(axesScene, axesCamera);
     }
 
