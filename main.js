@@ -40,7 +40,7 @@ function main() {
     scene.add(largeGridHelper);
 
     const modelContainer = new THREE.Group();
-    modelContainer.scale.set(-1, 1, 1);
+    modelContainer.scale.set(1, 1, 1);
     //modelContainer.rotation.z = Math.PI;
     scene.add(modelContainer);
 
