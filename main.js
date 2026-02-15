@@ -17,7 +17,7 @@ function main() {
     const axesCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
     axesCamera.position.set(0, 0, 10);
     axesCamera.lookAt(0, 0, 0);
-    const axesHelperObject = new THREE.AxesHelper(1.5);
+    const axesHelperObject = createCustomGizmo();
     axesScene.add(axesHelperObject);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -596,6 +596,46 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
         }
     }
     uvAttr.needsUpdate = true;
+}
+
+function createCustomGizmo() {
+    const gizmoGroup = new THREE.Group();
+    // X=merah, Y=hijau, Z=biru
+    const colors = { x: 0xff3333, y: 0x33ff33, z: 0x3333ff };
+    const axisLength = 1.2;
+    const ballRadius = 0.3;
+    const cylinderRadius = 0.05;
+    // bikin satu lengan sumbu (batang + bola)
+    function createAxis(color, rotation) {
+        const axis = new THREE.Group();
+        // batang (cylinder)
+        const material = new THREE.MeshBasicMaterial({ color: color });
+        const cylinderGeo = new THREE.CylinderGeometry(cylinderRadius, cylinderRadius, axisLength, 8);
+        cylinderGeo.translate(0, axisLength / 2, 0); // geser biar titik pusat di ujung bawah
+        const cylinder = new THREE.Mesh(cylinderGeo, material);
+        // bola (sphere) di ujung
+        const sphereGeo = new THREE.SphereGeometry(ballRadius, 16, 16);
+        sphereGeo.translate(0, axisLength, 0); // geser bola ke ujung batang
+        const sphere = new THREE.Mesh(sphereGeo, material);
+        axis.add(cylinder);
+        axis.add(sphere);
+        if (rotation) axis.rotation.set(...rotation);
+        return axis;
+    }
+    // 3 sumbu
+    const xAxis = createAxis(colors.x, [0, 0, -Math.PI / 2]); // putar ke sumbu X
+    const yAxis = createAxis(colors.y, [0, 0, 0]); // sumbu Y udah tegak lurus
+    const zAxis = createAxis(colors.z, [Math.PI / 2, 0, 0]);  // pputar ke sumbu Z
+    gizmoGroup.add(xAxis);
+    gizmoGroup.add(yAxis);
+    gizmoGroup.add(zAxis);
+    // bola abu abu kecil di tengah pusat
+    const centerBall = new THREE.Mesh(
+        new THREE.SphereGeometry(ballRadius * 0.6, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xaaaaaa })
+    );
+    gizmoGroup.add(centerBall);
+    return gizmoGroup;
 }
 
 main();
