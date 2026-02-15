@@ -605,8 +605,29 @@ function createCustomGizmo() {
     const axisLength = 1.2;
     const ballRadius = 0.3;
     const cylinderRadius = 0.05;
+    function createLabel(text) {
+        const canvas = document.createElement('canvas');
+        const size = 64; // resolusi kanvas teks
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext('2d');
+        context.font = 'bold 48px Arial, sans-serif'; 
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = 'black'; // warna tulisan, hitam biar kontras
+        context.fillText(text, size / 2, size / 2);
+        const texture = new THREE.CanvasTexture(canvas);
+        // pake SpriteMaterial biar teks selalu ngehadep kamera
+        const material = new THREE.SpriteMaterial({ 
+            map: texture,
+            depthTest: false // biar teksnya selalu nongol paling depan, gak ketutup bola
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(0.4, 0.4, 0.4); // ukuran teks
+        return sprite;
+    }
     // bikin satu lengan sumbu (batang + bola)
-    function createAxis(color, rotation) {
+    function createAxis(color, rotation, labelText) {
         const axis = new THREE.Group();
         // batang (cylinder)
         const material = new THREE.MeshBasicMaterial({ color: color });
@@ -617,15 +638,19 @@ function createCustomGizmo() {
         const sphereGeo = new THREE.SphereGeometry(ballRadius, 16, 16);
         sphereGeo.translate(0, axisLength, 0); // geser bola ke ujung batang
         const sphere = new THREE.Mesh(sphereGeo, material);
+        const label = createLabel(labelText);
+        label.position.y = axisLength; // posisi di tengah bola
+        label.renderOrder = 1;
         axis.add(cylinder);
         axis.add(sphere);
+        axis.add(label);
         if (rotation) axis.rotation.set(...rotation);
         return axis;
     }
     // 3 sumbu
-    const xAxis = createAxis(colors.x, [0, 0, -Math.PI / 2]); // putar ke sumbu X
-    const yAxis = createAxis(colors.y, [0, 0, 0]); // sumbu Y udah tegak lurus
-    const zAxis = createAxis(colors.z, [Math.PI / 2, 0, 0]);  // pputar ke sumbu Z
+    const xAxis = createAxis(colors.x, [0, 0, -Math.PI / 2], "X"); // putar ke sumbu X
+    const yAxis = createAxis(colors.y, [0, 0, 0], "Y"); // sumbu Y udah tegak lurus
+    const zAxis = createAxis(colors.z, [Math.PI / 2, 0, 0], "Z");  // pputar ke sumbu Z
     gizmoGroup.add(xAxis);
     gizmoGroup.add(yAxis);
     gizmoGroup.add(zAxis);
