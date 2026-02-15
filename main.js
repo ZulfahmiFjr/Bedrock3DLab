@@ -6,11 +6,19 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 function main() {
     const canvas = document.querySelector("#c");
     const renderer = new THREE.WebGLRenderer({ antialias: true, canvas, preserveDrawingBuffer: true });
+    renderer.autoClear = false;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(window.devicePixelRatio);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x333333);
+
+    const axesScene = new THREE.Scene();
+    const axesCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
+    axesCamera.position.set(0, 0, 10);
+    axesCamera.lookAt(0, 0, 0);
+    const axesHelperObject = new THREE.AxesHelper(1.5);
+    axesScene.add(axesHelperObject);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 16, 40);
@@ -356,7 +364,22 @@ function main() {
         }
 
         controls.update();
+        renderer.clear();
+        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
         renderer.render(scene, camera);
+        const gizmoSize = 150;
+        const padding = 20;
+        renderer.setViewport(
+            window.innerWidth - gizmoSize - padding,
+            padding,
+            gizmoSize, 
+            gizmoSize
+        );
+        axesCamera.position.copy(camera.position);
+        axesCamera.position.sub(controls.target); 
+        axesCamera.position.setLength(10);
+        axesCamera.lookAt(axesScene.position);
+        renderer.render(axesScene, axesCamera);
     }
 
     animate();
