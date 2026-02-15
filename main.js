@@ -454,12 +454,13 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
 
             const pivot = [...(boneData.pivot || [0, 0, 0])];
             const rotation = [...(boneData.rotation || [0, 0, 0])];
+            pivot[0] = -pivot[0];
             //pivot[0] *= -1;
             boneGroup.position.set(pivot[0], pivot[1], pivot[2]);
             boneGroup.rotation.order = "ZYX";
             boneGroup.rotation.set(
-                THREE.MathUtils.degToRad(rotation[0]),
-                THREE.MathUtils.degToRad(rotation[1]),
+                THREE.MathUtils.degToRad(-rotation[0]),
+                THREE.MathUtils.degToRad(-rotation[1]),
                 THREE.MathUtils.degToRad(rotation[2])
             );
 
@@ -472,7 +473,7 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                     if (size[1] === 0) size[1] = 0.01;
                     if (size[2] === 0) size[2] = 0.01;
                     origin[0] = -(origin[0] + size[0]);
-                    origin[2] = -(origin[2] + size[2]);
+                    // origin[2] = -(origin[2] + size[2]);
                     const finalOrigin = [origin[0] - inflate, origin[1] - inflate, origin[2] - inflate];
                     const geometry = new THREE.BoxGeometry(
                         size[0] + inflate * 2,
@@ -482,24 +483,13 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
 
                     applyUvToCube(geometry, cubeData, textureWidth, textureHeight);
                     const isOuterLayer = inflate > 0;
-                    let material;
-
-                    if (isOuterLayer) {
-                        material = new THREE.MeshLambertMaterial({
-                            map: texture,
-                            transparent: true,
-                            side: THREE.DoubleSide,
-                            depthWrite: false,
-                            alphaTest: 0.5,
-                        });
-                    } else {
-                        material = new THREE.MeshLambertMaterial({
-                            map: texture,
-                            transparent: true,
-                            side: THREE.DoubleSide,
-                            alphaTest: 0.5,
-                        });
-                    }
+                    const material = new THREE.MeshLambertMaterial({
+                        map: texture,
+                        transparent: true,
+                        side: THREE.DoubleSide,
+                        alphaTest: 0.5,
+                        depthWrite: !isOuterLayer,
+                    });
                     const mesh = new THREE.Mesh(geometry, material);
                     if (isOuterLayer) {
                         mesh.renderOrder = 1;
@@ -507,13 +497,40 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                         mesh.renderOrder = 0;
                     }
 
-                    mesh.position.set(
-                        finalOrigin[0] - pivot[0] + (size[0] + inflate * 2) / 2,
-                        finalOrigin[1] - pivot[1] + (size[1] + inflate * 2) / 2,
-                        finalOrigin[2] - pivot[2] + (size[2] + inflate * 2) / 2
-                    );
-
-                    boneGroup.add(mesh);
+                    if (cubeData.pivot && cubeData.rotation && !cubeData.rotation.every(r => r === 0)) {
+                        // percube rotation, pake subgroup buat rotate di pivot cube
+                        const cubePivot = [...cubeData.pivot];
+                        cubePivot[0] = -cubePivot[0]; // flip X untuk pivot juga
+                        const cubeGroup = new THREE.Group();
+                        cubeGroup.position.set(
+                            cubePivot[0] - pivot[0],
+                            cubePivot[1] - pivot[1],
+                            cubePivot[2] - pivot[2]
+                        );
+                        cubeGroup.rotation.order = "ZYX";
+                        const cubeRot = [...cubeData.rotation];
+                        // Bedrock -> Three.js rotation: flip X dan Y (bukan Z)
+                        cubeGroup.rotation.set(
+                            THREE.MathUtils.degToRad(-cubeRot[0]),
+                            THREE.MathUtils.degToRad(-cubeRot[1]),
+                            THREE.MathUtils.degToRad(cubeRot[2])
+                        );
+                        mesh.position.set(
+                            finalOrigin[0] - cubePivot[0] + (size[0] + inflate * 2) / 2,
+                            finalOrigin[1] - cubePivot[1] + (size[1] + inflate * 2) / 2,
+                            finalOrigin[2] - cubePivot[2] + (size[2] + inflate * 2) / 2
+                        );
+                        cubeGroup.add(mesh);
+                        boneGroup.add(cubeGroup);
+                    } else {
+                        // gak ada percube rotation, langsung offset ke bone
+                        mesh.position.set(
+                            finalOrigin[0] - pivot[0] + (size[0] + inflate * 2) / 2,
+                            finalOrigin[1] - pivot[1] + (size[1] + inflate * 2) / 2,
+                            finalOrigin[2] - pivot[2] + (size[2] + inflate * 2) / 2
+                        );
+                        boneGroup.add(mesh);
+                    }
                 }
             }
         }
@@ -562,38 +579,69 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
     const [w, h, d] = size;
     const uvAttr = geometry.attributes.uv;
 
-    // urutan Three.js: right, left, top, bottom, front, back
-    let faces = [
-        [uv[0], uv[1] + d, d, h], // right (+X)
-        [uv[0] + d + w, uv[1] + d, d, h], // left  (-X)
-        [uv[0] + d, uv[1], w, d], // top   (+Y)
-        [uv[0] + d + w, uv[1], w, d], // bottom(-Y)
-        [uv[0] + d, uv[1] + d, w, h], // front (+Z)
-        [uv[0] + d + w + d, uv[1] + d, w, h], // back  (-Z)
-    ];
+    if (cubeData.uv instanceof Array) { 
+        // urutan Three.js: right, left, top, bottom, front, back
+        let faces = [
+            [uv[0], uv[1] + d, d, h], // right (+X)
+            [uv[0] + d + w, uv[1] + d, d, h], // left  (-X)
+            [uv[0] + d, uv[1], w, d], // top   (+Y)
+            [uv[0] + d + w, uv[1], w, d], // bottom(-Y)
+            [uv[0] + d, uv[1] + d, w, h], // front (+Z)
+            [uv[0] + d + w + d, uv[1] + d, w, h], // back  (-Z)
+        ];
 
-    if (mirror) {
-        [faces[0], faces[1]] = [faces[1], faces[0]];
-    }
-    const uvInsetX = 0.1 / texWidth;
-    const uvInsetY = 0.1 / texHeight;
+        if (mirror) {
+            [faces[0], faces[1]] = [faces[1], faces[0]];
+        }
+        const uvInsetX = 0.1 / texWidth;
+        const uvInsetY = 0.1 / texHeight;
 
-    for (let i = 0; i < 6; i++) {
-        const [u, v, fw, fh] = faces[i];
-        const u0 = u / texWidth + uvInsetX;
-        const v0 = v / texHeight + uvInsetY;
-        const u1 = (u + fw) / texWidth - uvInsetX;
-        const v1 = (v + fh) / texHeight - uvInsetY;
-        if (i === 3) {
-            uvAttr.setXY(i * 4 + 0, u0, v1);
-            uvAttr.setXY(i * 4 + 1, u1, v1);
-            uvAttr.setXY(i * 4 + 2, u0, v0);
-            uvAttr.setXY(i * 4 + 3, u1, v0);
-        } else {
-            uvAttr.setXY(i * 4 + 0, u1, v0);
-            uvAttr.setXY(i * 4 + 1, u0, v0);
-            uvAttr.setXY(i * 4 + 2, u1, v1);
-            uvAttr.setXY(i * 4 + 3, u0, v1);
+        for (let i = 0; i < 6; i++) {
+            const [u, v, fw, fh] = faces[i];
+            const u0 = u / texWidth + uvInsetX;
+            const v0 = v / texHeight + uvInsetY;
+            const u1 = (u + fw) / texWidth - uvInsetX;
+            const v1 = (v + fh) / texHeight - uvInsetY;
+            if (i === 3) {
+                uvAttr.setXY(i * 4 + 0, u0, v1);
+                uvAttr.setXY(i * 4 + 1, u1, v1);
+                uvAttr.setXY(i * 4 + 2, u0, v0);
+                uvAttr.setXY(i * 4 + 3, u1, v0);
+            } else {
+                uvAttr.setXY(i * 4 + 0, u1, v0);
+                uvAttr.setXY(i * 4 + 1, u0, v0);
+                uvAttr.setXY(i * 4 + 2, u1, v1);
+                uvAttr.setXY(i * 4 + 3, u0, v1);
+            }
+        }
+    } else if (cubeData.uv && typeof cubeData.uv === 'object') {
+        // perface uv
+        // Three.js BoxGeometry face order, +X, -X, +Y, -Y, +Z, -Z
+        const faceOrder = ['east', 'west', 'up', 'down', 'south', 'north'];
+        for (let i = 0; i < 6; i++) {
+            const faceName = faceOrder[i];
+            const faceUV = cubeData.uv[faceName];
+            if (faceUV && faceUV.uv && faceUV.uv_size) {
+                let fu = faceUV.uv[0];
+                let fv = faceUV.uv[1];
+                let fuw = faceUV.uv_size[0];
+                let fvh = faceUV.uv_size[1];
+                // normalize to 0-1 range
+                let u0 = fu / texWidth;
+                let v0 = fv / texHeight;
+                let u1 = (fu + fuw) / texWidth;
+                let v1 = (fv + fvh) / texHeight;
+                uvAttr.setXY(i * 4 + 0, u1, v0);
+                uvAttr.setXY(i * 4 + 1, u0, v0);
+                uvAttr.setXY(i * 4 + 2, u1, v1);
+                uvAttr.setXY(i * 4 + 3, u0, v1);
+            } else {
+                // no UV for this face, set to 0
+                uvAttr.setXY(i * 4 + 0, 0, 0);
+                uvAttr.setXY(i * 4 + 1, 0, 0);
+                uvAttr.setXY(i * 4 + 2, 0, 0);
+                uvAttr.setXY(i * 4 + 3, 0, 0);
+            }
         }
     }
     uvAttr.needsUpdate = true;
