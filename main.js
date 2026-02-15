@@ -545,7 +545,7 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                     let childPivot = boneData.pivot || [0, 0, 0];
                     //parentPivot[0] *= -1;
                     bone.position.set(
-                        childPivot[0] - parentPivot[0],
+                        parentPivot[0] - childPivot[0],
                         childPivot[1] - parentPivot[1],
                         childPivot[2] - parentPivot[2]
                     );
