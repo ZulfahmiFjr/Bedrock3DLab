@@ -586,8 +586,8 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
             [uv[0] + d + w, uv[1] + d, d, h], // left  (-X)
             [uv[0] + d, uv[1], w, d], // top   (+Y)
             [uv[0] + d + w, uv[1], w, d], // bottom(-Y)
-            [uv[0] + d, uv[1] + d, w, h], // front (+Z)
             [uv[0] + d + w + d, uv[1] + d, w, h], // back  (-Z)
+            [uv[0] + d, uv[1] + d, w, h], // front (+Z)  
         ];
 
         if (mirror) {
@@ -602,6 +602,12 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
             const v0 = v / texHeight + uvInsetY;
             const u1 = (u + fw) / texWidth - uvInsetX;
             const v1 = (v + fh) / texHeight - uvInsetY;
+            if (i !== 2 && i !== 3) {
+                [u0, u1] = [u1, u0];
+            }
+            if (i === 2 || i === 3) {
+                [v0, v1] = [v1, v0];
+            }
             if (i === 3) {
                 uvAttr.setXY(i * 4 + 0, u0, v1);
                 uvAttr.setXY(i * 4 + 1, u1, v1);
@@ -631,6 +637,12 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
                 let v0 = fv / texHeight;
                 let u1 = (fu + fuw) / texWidth;
                 let v1 = (fv + fvh) / texHeight;
+                if (i !== 2 && i !== 3) {
+                    [u0, u1] = [u1, u0];
+                }
+                if (i === 2 || i === 3) {
+                    [v0, v1] = [v1, v0];
+                }
                 uvAttr.setXY(i * 4 + 0, u1, v0);
                 uvAttr.setXY(i * 4 + 1, u0, v0);
                 uvAttr.setXY(i * 4 + 2, u1, v1);
