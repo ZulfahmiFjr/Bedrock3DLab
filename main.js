@@ -213,7 +213,7 @@ function main() {
             const selectedIndex = event.target.value;
             if (selectedIndex !== "") {
                 const selectedGeo = geometries[selectedIndex];
-                loadAndRender(selectedGeo, textureUrl);
+                loadAndRender(selectedGeo, textureDataURL);
             }
         };
     }
@@ -598,10 +598,10 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
 
         for (let i = 0; i < 6; i++) {
             const [u, v, fw, fh] = faces[i];
-            const u0 = u / texWidth + uvInsetX;
-            const v0 = v / texHeight + uvInsetY;
-            const u1 = (u + fw) / texWidth - uvInsetX;
-            const v1 = (v + fh) / texHeight - uvInsetY;
+            let u0 = u / texWidth + uvInsetX;
+            let v0 = v / texHeight + uvInsetY;
+            let u1 = (u + fw) / texWidth - uvInsetX;
+            let v1 = (v + fh) / texHeight - uvInsetY;
             if (i !== 2 && i !== 3) {
                 [u0, u1] = [u1, u0];
             }
