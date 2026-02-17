@@ -482,16 +482,23 @@ function main() {
 
         controls.update();
         renderer.clear();
-        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-        renderer.render(scene, camera);
-
-        renderer.clearDepth();
         const size = renderer.getSize(new THREE.Vector2());
-        renderer.setViewport(10, size.y - 110, 100, 100);
+        renderer.setViewport(0, 0, size.x, size.y);
+        renderer.render(scene, camera);
+        const gizmoSize = 110;
+        const padding = 10;
+        renderer.clearDepth();
+        axesCamera.position.copy(camera.position);
+        axesCamera.position.sub(controls.target);
+        axesCamera.position.setLength(10);
+        axesCamera.lookAt(0, 0, 0);
+        renderer.setViewport(
+        size.x - gizmoSize - padding, // kanan
+        padding, // bawah
+        gizmoSize,
+        gizmoSize);
         renderer.render(axesScene, axesCamera);
         renderer.setViewport(0, 0, size.x, size.y);
-
-        // renderer.render(scene, camera);
     }
 
     animate();
