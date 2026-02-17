@@ -16,10 +16,18 @@ function main() {
     const canvas = document.querySelector("#c");
     const renderer = new THREE.WebGLRenderer({ antialias: true, canvas, preserveDrawingBuffer: true });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.autoClear = false;
     renderer.setPixelRatio(window.devicePixelRatio);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x333333);
+
+    const axesScene = new THREE.Scene();
+    const axesCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
+    axesCamera.position.set(0, 0, 10);
+    axesCamera.lookAt(0, 0, 0);
+    const axesHelperObject = createCustomGizmo();
+    axesScene.add(axesHelperObject);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 16, 40);
@@ -41,7 +49,7 @@ function main() {
     scene.add(largeGridHelper);
 
     const modelContainer = new THREE.Group();
-    modelContainer.scale.set(-1, 1, 1);
+    modelContainer.scale.set(1, 1, 1);
     //modelContainer.rotation.z = Math.PI;
     scene.add(modelContainer);
 
@@ -473,7 +481,17 @@ function main() {
         }
 
         controls.update();
+        renderer.clear();
+        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
         renderer.render(scene, camera);
+
+        renderer.clearDepth();
+        const size = renderer.getSize(new THREE.Vector2());
+        renderer.setViewport(10, size.y - 110, 100, 100);
+        renderer.render(axesScene, axesCamera);
+        renderer.setViewport(0, 0, size.x, size.y);
+
+        // renderer.render(scene, camera);
     }
 
     animate();
@@ -586,10 +604,10 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
         const createdBoneGroups = [];
 
         for (const boneData of bonesToRender) {
-            if (boneData.pivot) {
-                boneData.pivot[0] *= -1;
-                boneData.pivot[2] *= -1;
-            }
+            // if (boneData.pivot) {
+            //     boneData.pivot[0] *= -1;
+            //     boneData.pivot[2] *= -1;
+            // }
             const boneGroup = new THREE.Group();
             boneGroup.name = boneData.name;
             boneMap.set(boneData.name, boneGroup);
@@ -598,12 +616,12 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
 
             const pivot = [...(boneData.pivot || [0, 0, 0])];
             const rotation = [...(boneData.rotation || [0, 0, 0])];
-            //pivot[0] *= -1;
+            pivot[0] = -pivot[0];
             boneGroup.position.set(pivot[0], pivot[1], pivot[2]);
             boneGroup.rotation.order = "ZYX";
             boneGroup.rotation.set(
-                THREE.MathUtils.degToRad(rotation[0]),
-                THREE.MathUtils.degToRad(rotation[1]),
+                THREE.MathUtils.degToRad(-rotation[0]),
+                THREE.MathUtils.degToRad(-rotation[1]),
                 THREE.MathUtils.degToRad(rotation[2])
             );
 
@@ -616,7 +634,7 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                     if (size[1] === 0) size[1] = 0.01;
                     if (size[2] === 0) size[2] = 0.01;
                     origin[0] = -(origin[0] + size[0]);
-                    origin[2] = -(origin[2] + size[2]);
+                    // origin[2] = -(origin[2] + size[2]);
                     const finalOrigin = [origin[0] - inflate, origin[1] - inflate, origin[2] - inflate];
                     const geometry = new THREE.BoxGeometry(
                         size[0] + inflate * 2,
@@ -651,13 +669,40 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                         mesh.renderOrder = 0;
                     }
 
-                    mesh.position.set(
-                        finalOrigin[0] - pivot[0] + (size[0] + inflate * 2) / 2,
-                        finalOrigin[1] - pivot[1] + (size[1] + inflate * 2) / 2,
-                        finalOrigin[2] - pivot[2] + (size[2] + inflate * 2) / 2
-                    );
-
-                    boneGroup.add(mesh);
+                    if (cubeData.pivot && cubeData.rotation && !cubeData.rotation.every(r => r === 0)) {
+                        // percube rotation, pake subgroup buat rotate di pivot cube
+                        const cubePivot = [...cubeData.pivot];
+                        cubePivot[0] = -cubePivot[0]; // flip X untuk pivot juga
+                        const cubeGroup = new THREE.Group();
+                        cubeGroup.position.set(
+                            cubePivot[0] - pivot[0],
+                            cubePivot[1] - pivot[1],
+                            cubePivot[2] - pivot[2]
+                        );
+                        cubeGroup.rotation.order = "ZYX";
+                        const cubeRot = [...cubeData.rotation];
+                        // Bedrock -> Three.js rotation: flip X dan Y (bukan Z)
+                        cubeGroup.rotation.set(
+                            THREE.MathUtils.degToRad(-cubeRot[0]),
+                            THREE.MathUtils.degToRad(-cubeRot[1]),
+                            THREE.MathUtils.degToRad(cubeRot[2])
+                        );
+                        mesh.position.set(
+                            finalOrigin[0] - cubePivot[0] + (size[0] + inflate * 2) / 2,
+                            finalOrigin[1] - cubePivot[1] + (size[1] + inflate * 2) / 2,
+                            finalOrigin[2] - cubePivot[2] + (size[2] + inflate * 2) / 2
+                        );
+                        cubeGroup.add(mesh);
+                        boneGroup.add(cubeGroup);
+                    } else {
+                        // gak ada percube rotation, langsung offset ke bone
+                        mesh.position.set(
+                            finalOrigin[0] - pivot[0] + (size[0] + inflate * 2) / 2,
+                            finalOrigin[1] - pivot[1] + (size[1] + inflate * 2) / 2,
+                            finalOrigin[2] - pivot[2] + (size[2] + inflate * 2) / 2
+                        );
+                        boneGroup.add(mesh);
+                    }
                 }
             }
         }
@@ -672,7 +717,7 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
                     let childPivot = boneData.pivot || [0, 0, 0];
                     //parentPivot[0] *= -1;
                     bone.position.set(
-                        childPivot[0] - parentPivot[0],
+                        parentPivot[0] - childPivot[0],
                         childPivot[1] - parentPivot[1],
                         childPivot[2] - parentPivot[2]
                     );
@@ -706,41 +751,149 @@ function applyUvToCube(geometry, cubeData, texWidth, texHeight) {
     const [w, h, d] = size;
     const uvAttr = geometry.attributes.uv;
 
-    // urutan Three.js: right, left, top, bottom, front, back
-    let faces = [
-        [uv[0], uv[1] + d, d, h], // right (+X)
-        [uv[0] + d + w, uv[1] + d, d, h], // left  (-X)
-        [uv[0] + d, uv[1], w, d], // top   (+Y)
-        [uv[0] + d + w, uv[1], w, d], // bottom(-Y)
-        [uv[0] + d, uv[1] + d, w, h], // front (+Z)
-        [uv[0] + d + w + d, uv[1] + d, w, h], // back  (-Z)
-    ];
+    if (cubeData.uv instanceof Array) { 
+        // urutan Three.js: right, left, top, bottom, front, back
+        let faces = [
+            [uv[0], uv[1] + d, d, h], // right (+X)
+            [uv[0] + d + w, uv[1] + d, d, h], // left  (-X)
+            [uv[0] + d, uv[1], w, d], // top   (+Y)
+            [uv[0] + d + w, uv[1], w, d], // bottom(-Y)
+            [uv[0] + d + w + d, uv[1] + d, w, h], // back  (-Z)
+            [uv[0] + d, uv[1] + d, w, h], // front (+Z)  
+        ];
 
-    if (mirror) {
-        [faces[0], faces[1]] = [faces[1], faces[0]];
-    }
-    const uvInsetX = 0.1 / texWidth;
-    const uvInsetY = 0.1 / texHeight;
+        if (mirror) {
+            [faces[0], faces[1]] = [faces[1], faces[0]];
+        }
+        const uvInsetX = 0.1 / texWidth;
+        const uvInsetY = 0.1 / texHeight;
 
-    for (let i = 0; i < 6; i++) {
-        const [u, v, fw, fh] = faces[i];
-        const u0 = u / texWidth + uvInsetX;
-        const v0 = v / texHeight + uvInsetY;
-        const u1 = (u + fw) / texWidth - uvInsetX;
-        const v1 = (v + fh) / texHeight - uvInsetY;
-        if (i === 3) {
-            uvAttr.setXY(i * 4 + 0, u0, v1);
-            uvAttr.setXY(i * 4 + 1, u1, v1);
-            uvAttr.setXY(i * 4 + 2, u0, v0);
-            uvAttr.setXY(i * 4 + 3, u1, v0);
-        } else {
-            uvAttr.setXY(i * 4 + 0, u1, v0);
-            uvAttr.setXY(i * 4 + 1, u0, v0);
-            uvAttr.setXY(i * 4 + 2, u1, v1);
-            uvAttr.setXY(i * 4 + 3, u0, v1);
+        for (let i = 0; i < 6; i++) {
+            const [u, v, fw, fh] = faces[i];
+            let u0 = u / texWidth + uvInsetX;
+            let v0 = v / texHeight + uvInsetY;
+            let u1 = (u + fw) / texWidth - uvInsetX;
+            let v1 = (v + fh) / texHeight - uvInsetY;
+            if (i !== 2 && i !== 3) {
+                [u0, u1] = [u1, u0];
+            }
+            if (i === 2 || i === 3) {
+                [v0, v1] = [v1, v0];
+            }
+            if (i === 3) {
+                uvAttr.setXY(i * 4 + 0, u0, v1);
+                uvAttr.setXY(i * 4 + 1, u1, v1);
+                uvAttr.setXY(i * 4 + 2, u0, v0);
+                uvAttr.setXY(i * 4 + 3, u1, v0);
+            } else {
+                uvAttr.setXY(i * 4 + 0, u1, v0);
+                uvAttr.setXY(i * 4 + 1, u0, v0);
+                uvAttr.setXY(i * 4 + 2, u1, v1);
+                uvAttr.setXY(i * 4 + 3, u0, v1);
+            }
+        }
+    } else if (cubeData.uv && typeof cubeData.uv === 'object') {
+        // perface uv
+        // Three.js BoxGeometry face order, +X, -X, +Y, -Y, +Z, -Z
+        const faceOrder = ['east', 'west', 'up', 'down', 'south', 'north'];
+        for (let i = 0; i < 6; i++) {
+            const faceName = faceOrder[i];
+            const faceUV = cubeData.uv[faceName];
+            if (faceUV && faceUV.uv && faceUV.uv_size) {
+                let fu = faceUV.uv[0];
+                let fv = faceUV.uv[1];
+                let fuw = faceUV.uv_size[0];
+                let fvh = faceUV.uv_size[1];
+                // normalize to 0-1 range
+                let u0 = fu / texWidth;
+                let v0 = fv / texHeight;
+                let u1 = (fu + fuw) / texWidth;
+                let v1 = (fv + fvh) / texHeight;
+                if (i !== 2 && i !== 3) {
+                    [u0, u1] = [u1, u0];
+                }
+                if (i === 2 || i === 3) {
+                    [v0, v1] = [v1, v0];
+                }
+                uvAttr.setXY(i * 4 + 0, u1, v0);
+                uvAttr.setXY(i * 4 + 1, u0, v0);
+                uvAttr.setXY(i * 4 + 2, u1, v1);
+                uvAttr.setXY(i * 4 + 3, u0, v1);
+            } else {
+                // no UV for this face, set to 0
+                uvAttr.setXY(i * 4 + 0, 0, 0);
+                uvAttr.setXY(i * 4 + 1, 0, 0);
+                uvAttr.setXY(i * 4 + 2, 0, 0);
+                uvAttr.setXY(i * 4 + 3, 0, 0);
+            }
         }
     }
     uvAttr.needsUpdate = true;
+}
+
+function createCustomGizmo() {
+    const gizmoGroup = new THREE.Group();
+    // X=merah, Y=hijau, Z=biru
+    const colors = { x: 0xff3333, y: 0x33ff33, z: 0x3333ff };
+    const axisLength = 1.2;
+    const ballRadius = 0.3;
+    const cylinderRadius = 0.05;
+    function createLabel(text) {
+        const canvas = document.createElement('canvas');
+        const size = 64; // resolusi kanvas teks
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext('2d');
+        context.font = 'bold 48px Arial, sans-serif'; 
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = 'black'; // warna tulisan, hitam biar kontras
+        context.fillText(text, size / 2, size / 2);
+        const texture = new THREE.CanvasTexture(canvas);
+        // pake SpriteMaterial biar teks selalu ngehadep kamera
+        const material = new THREE.SpriteMaterial({ 
+            map: texture,
+            depthTest: false // biar teksnya selalu nongol paling depan, gak ketutup bola
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(0.4, 0.4, 0.4); // ukuran teks
+        return sprite;
+    }
+    // bikin satu lengan sumbu (batang + bola)
+    function createAxis(color, rotation, labelText) {
+        const axis = new THREE.Group();
+        // batang (cylinder)
+        const material = new THREE.MeshBasicMaterial({ color: color });
+        const cylinderGeo = new THREE.CylinderGeometry(cylinderRadius, cylinderRadius, axisLength, 8);
+        cylinderGeo.translate(0, axisLength / 2, 0); // geser biar titik pusat di ujung bawah
+        const cylinder = new THREE.Mesh(cylinderGeo, material);
+        // bola (sphere) di ujung
+        const sphereGeo = new THREE.SphereGeometry(ballRadius, 16, 16);
+        sphereGeo.translate(0, axisLength, 0); // geser bola ke ujung batang
+        const sphere = new THREE.Mesh(sphereGeo, material);
+        const label = createLabel(labelText);
+        label.position.y = axisLength; // posisi di tengah bola
+        label.renderOrder = 1;
+        axis.add(cylinder);
+        axis.add(sphere);
+        axis.add(label);
+        if (rotation) axis.rotation.set(...rotation);
+        return axis;
+    }
+    // 3 sumbu
+    const xAxis = createAxis(colors.x, [0, 0, -Math.PI / 2], "X"); // putar ke sumbu X
+    const yAxis = createAxis(colors.y, [0, 0, 0], "Y"); // sumbu Y udah tegak lurus
+    const zAxis = createAxis(colors.z, [Math.PI / 2, 0, 0], "Z");  // pputar ke sumbu Z
+    gizmoGroup.add(xAxis);
+    gizmoGroup.add(yAxis);
+    gizmoGroup.add(zAxis);
+    // bola abu abu kecil di tengah pusat
+    const centerBall = new THREE.Mesh(
+        new THREE.SphereGeometry(ballRadius * 0.6, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xaaaaaa })
+    );
+    gizmoGroup.add(centerBall);
+    return gizmoGroup;
 }
 
 main();
