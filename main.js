@@ -14,7 +14,12 @@ let actionInProgress = null;
 
 function main() {
     const canvas = document.querySelector("#c");
-    const renderer = new THREE.WebGLRenderer({ antialias: true, canvas, preserveDrawingBuffer: true });
+    const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        canvas,
+        preserveDrawingBuffer: true,
+        alpha: true,
+    });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.autoClear = false;
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -403,95 +408,113 @@ function main() {
     // loadModelAndTexture(modelContainer);
 
     function takeScreenshot() {
-        const originalCamPos = camera.position.clone();
-        const originalTarget = controls.target.clone();
         const originalBackground = scene.background ? scene.background.clone() : null;
-        gridHelper.visible = false;
-        largeGridHelper.visible = false;
-        scene.background = null;
-        renderer.setClearAlpha(0);
-        const box = new THREE.Box3().setFromObject(modelContainer);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const maxSize = Math.max(size.x, size.y, size.z);
-        const fov = camera.fov * (Math.PI / 180);
-        let cameraZ = Math.abs(maxSize / 1.5 / Math.tan(fov / 2));
-        cameraZ *= 1.5;
-        camera.position.set(center.x - cameraZ * 0.6, center.y + cameraZ * 0.4, center.z + cameraZ);
-        controls.target.copy(center);
-        controls.update();
-        renderer.render(scene, camera);
-        const mainCanvas = renderer.domElement;
-        const context =
-            mainCanvas.getContext("webgl2", { preserveDrawingBuffer: true }) ||
-            mainCanvas.getContext("webgl", { preserveDrawingBuffer: true });
-        const pixels = new Uint8Array(context.drawingBufferWidth * context.drawingBufferHeight * 4);
-        context.readPixels(
-            0,
-            0,
-            context.drawingBufferWidth,
-            context.drawingBufferHeight,
-            context.RGBA,
-            context.UNSIGNED_BYTE,
-            pixels
-        );
-        let top = context.drawingBufferHeight,
-            left = context.drawingBufferWidth,
-            right = 0,
-            bottom = 0;
-        for (let y = 0; y < context.drawingBufferHeight; y++) {
-            for (let x = 0; x < context.drawingBufferWidth; x++) {
-                const alpha = pixels[(y * context.drawingBufferWidth + x) * 4 + 3];
-                if (alpha > 0) {
-                    top = Math.min(top, y);
-                    left = Math.min(left, x);
-                    right = Math.max(right, x);
-                    bottom = Math.max(bottom, y);
+        const originalClearColor = renderer.getClearColor(new THREE.Color()).clone();
+        const originalClearAlpha = renderer.getClearAlpha();
+        const gridVisible = gridHelper.visible;
+        const largeGridVisible = largeGridHelper.visible;
+        const transformControlsVisible = transformControls.visible;
+        const selectionBoxVisible = selectionBoxHelper ? selectionBoxHelper.visible : null;
+        try {
+            // sembunyiin semua helper/editor object.
+            gridHelper.visible = false;
+            largeGridHelper.visible = false;
+            transformControls.visible = false;
+            if (selectionBoxHelper) {
+                selectionBoxHelper.visible = false;
+            }
+            // background transparan untuk screenshot.
+            scene.background = null;
+            renderer.setClearColor(0x000000, 0);
+            renderer.setClearAlpha(0);
+            // paksa viewport full canvas, bukan viewport kecil gizmo.
+            const canvasSize = renderer.getSize(new THREE.Vector2());
+            renderer.setViewport(0, 0, canvasSize.x, canvasSize.y);
+            renderer.setScissorTest(false);
+            // bersihin canvas lama supaya grid/gizmo dari frame sebelumnya tidak ikut.
+            renderer.clear(true, true, true);
+            // render hanya scene utama dari angle kamera saat ini
+            renderer.render(scene, camera);
+            const context =
+                renderer.domElement.getContext("webgl2", { preserveDrawingBuffer: true }) ||
+                renderer.domElement.getContext("webgl", { preserveDrawingBuffer: true });
+            const width = context.drawingBufferWidth;
+            const height = context.drawingBufferHeight;
+            const pixels = new Uint8Array(width * height * 4);
+            context.readPixels(
+                0,
+                0,
+                width,
+                height,
+                context.RGBA,
+                context.UNSIGNED_BYTE,
+                pixels
+            );
+            let top = height;
+            let left = width;
+            let right = 0;
+            let bottom = 0;
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const alpha = pixels[(y * width + x) * 4 + 3];
+                    if (alpha > 0) {
+                        top = Math.min(top, y);
+                        left = Math.min(left, x);
+                        right = Math.max(right, x);
+                        bottom = Math.max(bottom, y);
+                    }
                 }
             }
-        }
-
-        const cropWidth = right - left + 1;
-        const cropHeight = bottom - top + 1;
-
-        if (cropWidth <= 0 || cropHeight <= 0) {
-            gridHelper.visible = true;
-            largeGridHelper.visible = true;
+            const cropWidth = right - left + 1;
+            const cropHeight = bottom - top + 1;
+            if (cropWidth <= 0 || cropHeight <= 0) {
+                alert("Model tidak terlihat untuk discreenshot.");
+                return;
+            }
+            const imageData = new ImageData(
+                new Uint8ClampedArray(pixels),
+                width,
+                height
+            );
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = width;
+            tempCanvas.height = height;
+            tempCanvas.getContext("2d").putImageData(imageData, 0, 0);
+            const cropCanvas = document.createElement("canvas");
+            cropCanvas.width = cropWidth;
+            cropCanvas.height = cropHeight;
+            const cropCtx = cropCanvas.getContext("2d");
+            // flip vertikal karena readPixels membaca dari bawah ke atas
+            cropCtx.translate(0, cropHeight);
+            cropCtx.scale(1, -1);
+            cropCtx.drawImage(
+                tempCanvas,
+                left,
+                top,
+                cropWidth,
+                cropHeight,
+                0,
+                0,
+                cropWidth,
+                cropHeight
+            );
+            const dataURL = cropCanvas.toDataURL("image/png");
+            const link = document.createElement("a");
+            link.download = "model_screenshot.png";
+            link.href = dataURL;
+            link.click();
+        } finally {
+            // restore semua state supaya tampilan editor normal lagi
+            gridHelper.visible = gridVisible;
+            largeGridHelper.visible = largeGridVisible;
+            transformControls.visible = transformControlsVisible;
+            if (selectionBoxHelper && selectionBoxVisible !== null) {
+                selectionBoxHelper.visible = selectionBoxVisible;
+            }
             scene.background = originalBackground;
-            renderer.setClearAlpha(1);
-            alert("Model tidak terlihat untuk discreenshot.");
-            return;
+            renderer.setClearColor(originalClearColor, originalClearAlpha);
+            renderer.setClearAlpha(originalClearAlpha);
         }
-        const cropCanvas = document.createElement("canvas");
-        cropCanvas.width = cropWidth;
-        cropCanvas.height = cropHeight;
-        const cropCtx = cropCanvas.getContext("2d");
-        const imageData = new ImageData(
-            new Uint8ClampedArray(pixels),
-            context.drawingBufferWidth,
-            context.drawingBufferHeight
-        );
-        const tempCanvas = document.createElement("canvas");
-        tempCanvas.width = context.drawingBufferWidth;
-        tempCanvas.height = context.drawingBufferHeight;
-        tempCanvas.getContext("2d").putImageData(imageData, 0, 0);
-        cropCtx.translate(0, cropHeight);
-        cropCtx.scale(1, -1);
-        cropCtx.drawImage(tempCanvas, left, top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-        const dataURL = cropCanvas.toDataURL("image/png");
-        const link = document.createElement("a");
-        link.download = "model_screenshot.png";
-        link.href = dataURL;
-        link.click();
-
-        camera.position.copy(originalCamPos);
-        controls.target.copy(originalTarget);
-        controls.update();
-        gridHelper.visible = true;
-        largeGridHelper.visible = true;
-        scene.background = originalBackground;
-        renderer.setClearAlpha(1);
     }
 
     const screenshotBtn = document.getElementById("screenshotBtn");
@@ -644,6 +667,16 @@ function clearModelContainer(parentGroup) {
     actionInProgress = null;
     boneMenuContainer.classList.add("hidden");
     boneMenuToggle.classList.add("hidden");
+}
+
+function setCameraToFrontRightTop(camera, controls, center, cameraDist) {
+    camera.position.set(
+        center.x + cameraDist * 0.6,
+        center.y + cameraDist * 0.45,
+        center.z - cameraDist * 0.8
+    );
+    controls.target.copy(center);
+    controls.update();
 }
 
 async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, controls) {
@@ -808,13 +841,7 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
         const diagonal = size.length();
         let cameraDist = diagonal / 2 / Math.tan(fov / 2);
         cameraDist *= 1.2;
-        camera.position.set(
-            center.x + cameraDist * 0.6, // kanan
-            center.y + cameraDist * 0.45, // atas
-            center.z - cameraDist * 0.8 // depan
-        );
-        controls.target.copy(center);
-        controls.update();
+        setCameraToFrontRightTop(camera, controls, center, cameraDist);
         return createdBoneGroups;
     } catch (error) {
         console.error("Gagal memuat model:", error);
