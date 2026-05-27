@@ -4,7 +4,7 @@ An interactive browser-based Minecraft Bedrock 3D model renderer, bone inspector
 
 The renderer supports Bedrock geometry JSON files, PNG textures, bone hierarchy inspection, transform tools, clean screenshots, and edited JSON export.
 
-🌐 **[Live Demo](https://ZulfahmiFjr.github.io/Bedrock3DLab/)**
+🌐 **[Live Demo](https://zulfahmifjr.github.io/Bedrock3DLab/?model=boat)**
 
 Here’s an example of a Sniffer and Player model rendered inside the viewer.
 
