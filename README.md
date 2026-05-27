@@ -1,10 +1,10 @@
-# Minecraft Bedrock 3D Model Renderer
+# Minecraft Bedrock 3D Model Lab
 
-An interactive web-based tool built to load, display, inspect, and edit Minecraft Bedrock Edition geometry 3D models directly in your browser. This project was developed from scratch using Three.js and tackles several rendering challenges to faithfully reproduce models as they appear in Blockbench.
+An interactive browser-based Minecraft Bedrock 3D model renderer, bone inspector, and lightweight geometry editor built with Three.js.
 
 The renderer supports Bedrock geometry JSON files, PNG textures, bone hierarchy inspection, transform tools, clean screenshots, and edited JSON export.
 
-🌐 **[Live Demo](https://ZulfahmiFjr.github.io/3DModelRenderer/)**
+🌐 **[Live Demo](https://ZulfahmiFjr.github.io/Bedrock3DLab/)**
 
 Here’s an example of a Sniffer and Player model rendered inside the viewer.
 
@@ -114,7 +114,7 @@ Here’s an example of a Sniffer and Player model rendered inside the viewer.
 
 ## 🛠️ How to Use
 
-1. Open the **[Live Demo](https://ZulfahmiFjr.github.io/3DModelRenderer/)**.
+1. Open the **[Live Demo](https://ZulfahmiFjr.github.io/Bedrock3DLab/)**.
 
 2. In the top-left control panel, choose your files:
 
