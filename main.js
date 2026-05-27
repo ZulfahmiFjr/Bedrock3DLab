@@ -598,24 +598,63 @@ function resizeRendererToDisplaySize(renderer) {
     return needResize;
 }
 
+function disposeMaterial(material, disposedTextures = new Set()) {
+    if (!material) return;
+    // dispose semua texture yg menempel di material, misalnya map, alphaMap, normalMap, dll.
+    for (const value of Object.values(material)) {
+        if (value && value.isTexture && !disposedTextures.has(value)) {
+            value.dispose();
+            disposedTextures.add(value);
+        }
+    }
+    material.dispose();
+}
+
+function disposeObject3D(object, disposedGeometries = new Set(), disposedMaterials = new Set(), disposedTextures = new Set()) {
+    object.traverse((child) => {
+        if (child.geometry && !disposedGeometries.has(child.geometry)) {
+            child.geometry.dispose();
+            disposedGeometries.add(child.geometry);
+        }
+        if (child.material) {
+            if (Array.isArray(child.material)) {
+                child.material.forEach((material) => {
+                    if (material && !disposedMaterials.has(material)) {
+                        disposeMaterial(material, disposedTextures);
+                        disposedMaterials.add(material);
+                    }
+                });
+            } else if (!disposedMaterials.has(child.material)) {
+                disposeMaterial(child.material, disposedTextures);
+                disposedMaterials.add(child.material);
+            }
+        }
+    });
+}
+
+function clearModelContainer(parentGroup) {
+    disposeObject3D(parentGroup);
+    // hapus semua object/bone/mesh lama dari container
+    parentGroup.clear();
+    // bersihin state editor yg terhubung ke model lama
+    boneMap.clear();
+    boneList.innerHTML = "";
+    undoStack.length = 0;
+    redoStack.length = 0;
+    actionInProgress = null;
+    boneMenuContainer.classList.add("hidden");
+    boneMenuToggle.classList.add("hidden");
+}
+
 async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, controls) {
     try {
-        while (parentGroup.children.length > 0) {
-            const child = parentGroup.children[0];
-            parentGroup.remove(child);
-            if (child.geometry) child.geometry.dispose();
-            if (child.material) child.material.dispose();
-        }
-
+        clearModelContainer(parentGroup);
         const textureLoader = new THREE.TextureLoader();
-
         const texture = await textureLoader.loadAsync(textureDataURL);
         texture.colorSpace = THREE.SRGBColorSpace;
-
         texture.magFilter = THREE.NearestFilter;
         texture.minFilter = THREE.NearestFilter;
         texture.flipY = false;
-
         const textureWidth = geo.description.texture_width;
         const textureHeight = geo.description.texture_height;
         const allBones = new Map();
@@ -632,10 +671,6 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
         //     //     b.name === "rightSleeve" ||
         //     //     b.name === "jacket"
         // );
-        boneMap.clear();
-        boneList.innerHTML = "";
-        boneMenuContainer.classList.add("hidden");
-        boneMenuToggle.classList.add("hidden");
 
         const bonesToRender = geo.bones;
         const createdBoneGroups = [];
@@ -773,7 +808,11 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
         const diagonal = size.length();
         let cameraDist = diagonal / 2 / Math.tan(fov / 2);
         cameraDist *= 1.2;
-        camera.position.set(center.x - cameraDist * 0.5, center.y + cameraDist * 0.5, center.z + cameraDist * 0.5);
+        camera.position.set(
+            center.x + cameraDist * 0.6, // kanan
+            center.y + cameraDist * 0.45, // atas
+            center.z - cameraDist * 0.8 // depan
+        );
         controls.target.copy(center);
         controls.update();
         return createdBoneGroups;
