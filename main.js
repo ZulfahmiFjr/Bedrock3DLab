@@ -245,31 +245,45 @@ function main() {
             return;
         }
 
-        if (geometries.length === 1) {
+       if (geometries.length === 1) {
             geometrySelectorGroup.classList.add("hidden");
+            geometrySelectorGroup.style.display = "none";
+            geometrySelector.innerHTML = "";
             loadAndRender(geometries[0], textureDataURL);
         } else {
             populateGeometrySelector(geometries);
             geometrySelectorGroup.classList.remove("hidden");
-            alert("File ini berisi beberapa model. Silakan pilih satu dari dropdown.");
+            geometrySelectorGroup.style.display = "block";
+            // Jangan pakai alert di sini, supaya dropdown langsung kelihatan.
+            console.log(`File ini berisi ${geometries.length} geometry. Silakan pilih dari dropdown.`);
         }
     });
 
     function populateGeometrySelector(geometries) {
-        geometrySelector.innerHTML = '<option value="">-- Select Model --</option>';
+        geometrySelector.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = `-- Select Model (${geometries.length} found) --`;
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        geometrySelector.appendChild(placeholder);
         geometries.forEach((geo, index) => {
-            const identifier = geo.description.identifier || `No Name ${index + 1}`;
+            const identifier =
+                geo.description?.identifier ||
+                geo.description?.geometry_name ||
+                `No Name ${index + 1}`;
             const option = document.createElement("option");
             option.value = index;
-            option.textContent = identifier;
+            option.textContent = `${index + 1}. ${identifier}`;
             geometrySelector.appendChild(option);
         });
         geometrySelector.onchange = (event) => {
-            const selectedIndex = event.target.value;
-            if (selectedIndex !== "") {
-                const selectedGeo = geometries[selectedIndex];
-                loadAndRender(selectedGeo, textureUrl);
-            }
+            const selectedIndex = Number(event.target.value);
+            if (!Number.isInteger(selectedIndex)) return;
+            if (!geometries[selectedIndex]) return;
+            const selectedGeo = geometries[selectedIndex];
+            // pakai textureDataURL, bukan textureUrl.
+            loadAndRender(selectedGeo, textureDataURL);
         };
     }
 
@@ -502,6 +516,7 @@ function main() {
     }
 
     animate();
+
 }
 
 function undo() {
