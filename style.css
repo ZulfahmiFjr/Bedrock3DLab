@@ -287,6 +287,10 @@ body {
     background: linear-gradient(to right, #34c759, #23a446);
 }
 
+#exportJsonBtn {
+    background: linear-gradient(to right, #ff9500, #ff6a00);
+}
+
 #geometry-selector-group {
     width: 100%;
 }

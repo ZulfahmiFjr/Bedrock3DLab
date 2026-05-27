@@ -262,6 +262,7 @@ function main() {
     const jsonInput = document.getElementById("jsonFile");
     const textureInput = document.getElementById("textureFile");
     const loadBtn = document.getElementById("loadBtn");
+    const exportJsonBtn = document.getElementById("exportJsonBtn");
     const jsonFileLabel = document.getElementById("jsonFile-label");
     const textureFileLabel = document.getElementById("textureFile-label");
     const controlsPanel = document.getElementById("controls-panel");
@@ -272,11 +273,17 @@ function main() {
 
     let modelData = null;
     let textureDataURL = null;
+    let loadedJsonFileName = "model.json";
+    let activeGeometryIndex = null;
+    let activeGeometryIdentifier = "geometry";
 
     jsonInput.addEventListener("change", (event) => {
         const file = event.target.files[0];
         if (!file) return;
         jsonFileLabel.textContent = file.name;
+        loadedJsonFileName = file.name;
+        activeGeometryIndex = null;
+        activeGeometryIdentifier = "geometry";
         geometrySelectorGroup.classList.add("hidden");
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -317,7 +324,7 @@ function main() {
             geometrySelectorGroup.classList.add("hidden");
             geometrySelectorGroup.style.display = "none";
             geometrySelector.innerHTML = "";
-            loadAndRender(geometries[0], textureDataURL);
+            loadAndRender(geometries[0], textureDataURL, 0);
         } else {
             populateGeometrySelector(geometries);
             geometrySelectorGroup.classList.remove("hidden");
@@ -351,7 +358,7 @@ function main() {
             if (!geometries[selectedIndex]) return;
             const selectedGeo = geometries[selectedIndex];
             // pakai textureDataURL, bukan textureUrl.
-            loadAndRender(selectedGeo, textureDataURL);
+            loadAndRender(selectedGeo, textureDataURL, selectedIndex);
         };
     }
 
@@ -424,8 +431,13 @@ function main() {
     //     menuToggleBtn.classList.remove("hidden");
     // }
 
-    async function loadAndRender(geo, textureUrl) {
+    async function loadAndRender(geo, textureUrl, geometryIndex = null) {
         if (!geo || !textureUrl) return;
+        activeGeometryIndex = geometryIndex;
+        activeGeometryIdentifier =
+            geo.description?.identifier ||
+            geo.description?.geometry_name ||
+            `geometry_${geometryIndex ?? 0}`;
         deselectBone();
         const bones = await loadModelAndTexture(modelContainer, geo, textureUrl, camera, controls);
         draggableObjects = bones;
@@ -460,6 +472,198 @@ function main() {
     });
 
     // loadModelAndTexture(modelContainer);
+
+    function cleanNumber(value, precision = 4) {
+        const factor = Math.pow(10, precision);
+        const rounded = Math.round(value * factor) / factor;
+        return Object.is(rounded, -0) ? 0 : rounded;
+    }
+
+    function normalizeDegrees(degrees) {
+        let normalized = ((degrees + 180) % 360 + 360) % 360 - 180;
+        return cleanNumber(normalized);
+    }
+
+    function deepClone(value) {
+        if (typeof structuredClone === "function") {
+            return structuredClone(value);
+        }
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function makeSafeFileName(value) {
+        return String(value || "geometry")
+            .replace(/\.json$/i, "")
+            .replace(/[^\w.-]+/g, "_");
+    }
+
+    function downloadJsonFile(data, fileName) {
+        const jsonString = JSON.stringify(data, null, 4);
+        const blob = new Blob([jsonString], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function exportEditedJson() {
+        if (!modelData) {
+            alert("Belum ada file JSON yang diload.");
+            return;
+        }
+        if (activeGeometryIndex === null) {
+            alert("Belum ada geometry aktif. Load atau pilih model dulu.");
+            return;
+        }
+        const geometries = modelData["minecraft:geometry"];
+        if (!geometries || !geometries[activeGeometryIndex]) {
+            alert("Geometry aktif tidak ditemukan.");
+            return;
+        }
+        const exportedData = deepClone(modelData);
+        const exportedGeo = exportedData["minecraft:geometry"][activeGeometryIndex];
+        if (!exportedGeo.bones || exportedGeo.bones.length === 0) {
+            alert("Geometry aktif tidak punya bones.");
+            return;
+        }
+        const bonesByName = new Map();
+        const originalPivotByName = new Map();
+        const exportedPivotCache = new Map();
+        let hasUnsupportedScale = false;
+        exportedGeo.bones.forEach((bone) => {
+            bonesByName.set(bone.name, bone);
+            originalPivotByName.set(bone.name, [...(bone.pivot || [0, 0, 0])]);
+        });
+
+        function hasDelta(delta) {
+            return delta.some((value) => Math.abs(value) > 0.0001);
+        }
+
+        function shiftVector3Array(vector, delta) {
+            if (!Array.isArray(vector) || vector.length < 3) return;
+            vector[0] = cleanNumber(vector[0] + delta[0]);
+            vector[1] = cleanNumber(vector[1] + delta[1]);
+            vector[2] = cleanNumber(vector[2] + delta[2]);
+        }
+
+        function shiftLocators(locators, delta) {
+            if (!locators || typeof locators !== "object") return;
+            Object.values(locators).forEach((locator) => {
+                if (Array.isArray(locator)) {
+                    shiftVector3Array(locator, delta);
+                    return;
+                }
+                if (locator && typeof locator === "object") {
+                    if (Array.isArray(locator.offset)) {
+                        shiftVector3Array(locator.offset, delta);
+                    }
+                    if (Array.isArray(locator.pivot)) {
+                        shiftVector3Array(locator.pivot, delta);
+                    }
+                }
+            });
+        }
+
+        function shiftBoneGeometryData(bone, delta) {
+            if (!hasDelta(delta)) return;
+            if (bone.cubes) {
+                bone.cubes.forEach((cube) => {
+                    if (Array.isArray(cube.origin)) {
+                        shiftVector3Array(cube.origin, delta);
+                    }
+                    // untuk cube yg punya percube rotation.
+                    if (Array.isArray(cube.pivot)) {
+                        shiftVector3Array(cube.pivot, delta);
+                    }
+                });
+            }
+            shiftLocators(bone.locators, delta);
+        }
+
+        function getExportedPivot(bone) {
+            if (exportedPivotCache.has(bone.name)) {
+                return exportedPivotCache.get(bone.name);
+            }
+            const object = boneMap.get(bone.name);
+            if (!object) {
+                const fallbackPivot = [...(bone.pivot || [0, 0, 0])];
+                exportedPivotCache.set(bone.name, fallbackPivot);
+                return fallbackPivot;
+            }
+            let pivot;
+            if (bone.parent && bonesByName.has(bone.parent)) {
+                const parentBone = bonesByName.get(bone.parent);
+                const parentPivot = getExportedPivot(parentBone);
+                // kebalikan dari rumus import parent-child:
+                // object.position = parentPivot - childPivot untuk X,
+                // object.position = childPivot - parentPivot untuk Y/Z.
+                pivot = [
+                    parentPivot[0] - object.position.x,
+                    object.position.y + parentPivot[1],
+                    object.position.z + parentPivot[2],
+                ];
+            } else {
+                // kebalikan dari rumus root bone saat import:
+                // Three.js X adalah hasil flip dari Bedrock X.
+                pivot = [
+                    -object.position.x,
+                    object.position.y,
+                    object.position.z,
+                ];
+            }
+            pivot = pivot.map((value) => cleanNumber(value));
+            exportedPivotCache.set(bone.name, pivot);
+            return pivot;
+        }
+
+        exportedGeo.bones.forEach((bone) => {
+            const object = boneMap.get(bone.name);
+            if (!object) return;
+            const originalPivot = originalPivotByName.get(bone.name) || [0, 0, 0];
+            const exportedPivot = getExportedPivot(bone);
+            const pivotDelta = [
+                cleanNumber(exportedPivot[0] - originalPivot[0]),
+                cleanNumber(exportedPivot[1] - originalPivot[1]),
+                cleanNumber(exportedPivot[2] - originalPivot[2]),
+            ];
+            // pivot diganti.
+            bone.pivot = exportedPivot;
+            // origin cube, cube pivot, dan locator juga harus ikut geser.
+            // kalo gak, hasil reload akan beda dari tampilan editor.
+            shiftBoneGeometryData(bone, pivotDelta);
+            // kebalikan dari rumus import rotation:
+            // Three.js = [-bedrockX, -bedrockY, bedrockZ]
+            const rotation = [
+                normalizeDegrees(-THREE.MathUtils.radToDeg(object.rotation.x)),
+                normalizeDegrees(-THREE.MathUtils.radToDeg(object.rotation.y)),
+                normalizeDegrees(THREE.MathUtils.radToDeg(object.rotation.z)),
+            ];
+            const hasRotation = rotation.some((value) => Math.abs(value) > 0.0001);
+            if (hasRotation) {
+                bone.rotation = rotation;
+            } else {
+                delete bone.rotation;
+            }
+            const scaleChanged =
+                Math.abs(object.scale.x - 1) > 0.0001 ||
+                Math.abs(object.scale.y - 1) > 0.0001 ||
+                Math.abs(object.scale.z - 1) > 0.0001;
+            if (scaleChanged) {
+                hasUnsupportedScale = true;
+            }
+        });
+        const baseName = makeSafeFileName(loadedJsonFileName);
+        const geoName = makeSafeFileName(activeGeometryIdentifier);
+        const fileName = `${baseName}_${geoName}_edited.json`;
+        downloadJsonFile(exportedData, fileName);
+        if (hasUnsupportedScale) {
+            alert(
+                "Export selesai, tapi ada bone yang memakai scale. Scale belum diexport ke format Bedrock geometry. Untuk scale, nanti perlu fitur bake scale into cubes."
+            );
+        }
+    }
 
     function takeScreenshot() {
         const originalBackground = scene.background ? scene.background.clone() : null;
@@ -571,6 +775,7 @@ function main() {
         }
     }
 
+    exportJsonBtn.addEventListener("click", exportEditedJson);
     const screenshotBtn = document.getElementById("screenshotBtn");
     screenshotBtn.addEventListener("click", takeScreenshot);
 
