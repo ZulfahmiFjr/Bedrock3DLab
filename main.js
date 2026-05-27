@@ -277,6 +277,76 @@ function main() {
     let activeGeometryIndex = null;
     let activeGeometryIdentifier = "geometry";
 
+    const SAMPLE_MODELS = {
+        boat: {
+            json: "assets/boat.json",
+            texture: "assets/boat.png",
+            displayName: "Boat",
+        },
+        player: {
+            json: "assets/player.json",
+            texture: "assets/player.png",
+            displayName: "Player",
+        },
+        sniffer: {
+            json: "assets/sniffer.json",
+            texture: "assets/sniffer.png",
+            displayName: "Sniffer",
+        },
+    };
+
+    function getRequestedSampleModel() {
+        const params = new URLSearchParams(window.location.search);
+        const queryModel = params.get("model") || params.get("sample");
+        if (queryModel) {
+            return queryModel.toLowerCase();
+        }
+        const pathParts = window.location.pathname.split("/").filter(Boolean);
+        const lastPath = pathParts[pathParts.length - 1]?.toLowerCase();
+        if (SAMPLE_MODELS[lastPath]) {
+            return lastPath;
+        }
+        return null;
+    }
+
+    async function autoLoadSampleModel(modelKey) {
+        const sample = SAMPLE_MODELS[modelKey];
+        if (!sample) return;
+        try {
+            jsonFileLabel.textContent = `${sample.displayName}.json`;
+            textureFileLabel.textContent = `${sample.displayName}.png`;
+            loadedJsonFileName = `${modelKey}.json`;
+            activeGeometryIndex = null;
+            activeGeometryIdentifier = "geometry";
+            const jsonResponse = await fetch(sample.json);
+            if (!jsonResponse.ok) {
+                throw new Error(`Failed to load ${sample.json}: ${jsonResponse.status}`);
+            }
+            modelData = await jsonResponse.json();
+            // TextureLoader bisa menerima URL string langsung, jadi gak perlu convert PNG ke dataURL
+            textureDataURL = sample.texture;
+            const geometries = modelData["minecraft:geometry"];
+            if (!geometries || geometries.length === 0) {
+                alert("Sample model tidak berisi data geometri yang valid.");
+                return;
+            }
+            if (geometries.length === 1) {
+                geometrySelectorGroup.classList.add("hidden");
+                geometrySelectorGroup.style.display = "none";
+                geometrySelector.innerHTML = "";
+                await loadAndRender(geometries[0], textureDataURL, 0);
+            } else {
+                populateGeometrySelector(geometries);
+                geometrySelectorGroup.classList.remove("hidden");
+                geometrySelectorGroup.style.display = "block";
+            }
+            console.log(`Auto-loaded sample model: ${modelKey}`);
+        } catch (error) {
+            console.error("Gagal auto-load sample model:", error);
+            alert(`Gagal memuat sample model: ${modelKey}`);
+        }
+    }
+
     jsonInput.addEventListener("change", (event) => {
         const file = event.target.files[0];
         if (!file) return;
@@ -312,14 +382,11 @@ function main() {
             alert("Harap pilih file model.json dan texture.png terlebih dahulu.");
             return;
         }
-
         const geometries = modelData["minecraft:geometry"];
-
         if (!geometries || geometries.length === 0) {
             alert("File JSON tidak berisi data geometri yang valid.");
             return;
         }
-
        if (geometries.length === 1) {
             geometrySelectorGroup.classList.add("hidden");
             geometrySelectorGroup.style.display = "none";
@@ -329,7 +396,7 @@ function main() {
             populateGeometrySelector(geometries);
             geometrySelectorGroup.classList.remove("hidden");
             geometrySelectorGroup.style.display = "block";
-            // Jangan pakai alert di sini, supaya dropdown langsung kelihatan.
+            // gak pake alert di sini, supaya dropdown langsung kelihatan
             console.log(`File ini berisi ${geometries.length} geometry. Silakan pilih dari dropdown.`);
         }
     });
@@ -357,7 +424,7 @@ function main() {
             if (!Number.isInteger(selectedIndex)) return;
             if (!geometries[selectedIndex]) return;
             const selectedGeo = geometries[selectedIndex];
-            // pakai textureDataURL, bukan textureUrl.
+            // pake textureDataURL, bukan textureUrl.
             loadAndRender(selectedGeo, textureDataURL, selectedIndex);
         };
     }
@@ -778,6 +845,10 @@ function main() {
     exportJsonBtn.addEventListener("click", exportEditedJson);
     const screenshotBtn = document.getElementById("screenshotBtn");
     screenshotBtn.addEventListener("click", takeScreenshot);
+    const requestedSampleModel = getRequestedSampleModel();
+    if (requestedSampleModel) {
+        autoLoadSampleModel(requestedSampleModel);
+    }
 
     function animate() {
         requestAnimationFrame(animate);
