@@ -57,6 +57,7 @@ function main() {
     const mouse = new THREE.Vector2();
     let draggableObjects = [];
     let selectionBoxHelper = null;
+    let selectedBoneName = null;
     const transformControls = new TransformControls(camera, renderer.domElement);
     scene.add(transformControls);
 
@@ -134,6 +135,7 @@ function main() {
         } else {
             if (transformControls.object) {
                 transformControls.detach();
+                selectedBoneName = null;
                 if (selectionBoxHelper) {
                     scene.remove(selectionBoxHelper);
                     selectionBoxHelper.dispose();
@@ -325,9 +327,14 @@ function main() {
     function selectBoneByName(boneName) {
         const targetBone = boneMap.get(boneName);
         if (!targetBone) return;
-        recenterPivot(targetBone);
+        // jangan recenter pivot saat select, bone pivot sudah berasal dari data JSON, jadi select tidak boleh mengubah struktur model.
+        selectedBoneName = boneName;
         transformControls.attach(targetBone);
-        if (selectionBoxHelper) scene.remove(selectionBoxHelper);
+        if (selectionBoxHelper) {
+            scene.remove(selectionBoxHelper);
+            selectionBoxHelper.dispose();
+            selectionBoxHelper = null;
+        }
         selectionBoxHelper = new THREE.BoxHelper(targetBone, 0xffff00);
         scene.add(selectionBoxHelper);
         document.querySelectorAll(".bone-item").forEach((item) => {
@@ -353,6 +360,14 @@ function main() {
 
     async function loadAndRender(geo, textureUrl) {
         if (!geo || !textureUrl) return;
+        transformControls.detach();
+        selectedBoneName = null;
+        if (selectionBoxHelper) {
+            scene.remove(selectionBoxHelper);
+            selectionBoxHelper.dispose();
+            selectionBoxHelper = null;
+        }
+        document.querySelectorAll(".bone-item.active").forEach((item) => item.classList.remove("active"));
         const bones = await loadModelAndTexture(modelContainer, geo, textureUrl, camera, controls);
         draggableObjects = bones;
         if (geo.bones && geo.bones.length > 0) {
@@ -559,7 +574,7 @@ function redo() {
     }
 }
 
-function recenterPivot(object) {
+function experimentalRecenterPivot(object) {
     if (object.children.length === 0) return;
     const worldCenter = new THREE.Vector3();
     new THREE.Box3().setFromObject(object).getCenter(worldCenter);
