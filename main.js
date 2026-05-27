@@ -64,14 +64,22 @@ function main() {
     let selectionBoxHelper = null;
     let selectedBoneName = null;
     const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.setMode("translate");
+    transformControls.setSpace("local");
+    transformControls.setTranslationSnap(1);
+    transformControls.setRotationSnap(THREE.MathUtils.degToRad(15));
+    transformControls.setScaleSnap(0.1);
     scene.add(transformControls);
+    let currentTransformMode = "translate";
+    let currentTransformSpace = "local";
 
     transformControls.addEventListener("dragging-changed", function (event) {
         controls.enabled = !event.value;
     });
 
     transformControls.addEventListener("objectChange", function () {
-        if (transformControls.object) {
+        if (!transformControls.object) return;
+        if (currentTransformMode === "translate") {
             transformControls.object.position.x = Math.round(transformControls.object.position.x);
             transformControls.object.position.y = Math.round(transformControls.object.position.y);
             transformControls.object.position.z = Math.round(transformControls.object.position.z);
@@ -110,6 +118,30 @@ function main() {
         }
     });
 
+    function setTransformMode(mode) {
+        if (!["translate", "rotate", "scale"].includes(mode)) return;
+        currentTransformMode = mode;
+        transformControls.setMode(mode);
+        console.log(`Transform mode: ${mode}`);
+    }
+
+    function toggleTransformSpace() {
+        currentTransformSpace = currentTransformSpace === "local" ? "world" : "local";
+        transformControls.setSpace(currentTransformSpace);
+        console.log(`Transform space: ${currentTransformSpace}`);
+    }
+
+    function deselectBone() {
+        transformControls.detach();
+        selectedBoneName = null;
+        if (selectionBoxHelper) {
+            scene.remove(selectionBoxHelper);
+            selectionBoxHelper.dispose();
+            selectionBoxHelper = null;
+        }
+        document.querySelectorAll(".bone-item.active").forEach((item) => item.classList.remove("active"));
+    }
+
     window.addEventListener("pointerdown", function (event) {
         if (transformControls.dragging === true) return;
         if (event.target !== renderer.domElement) return;
@@ -139,26 +171,55 @@ function main() {
             }
         } else {
             if (transformControls.object) {
-                transformControls.detach();
-                selectedBoneName = null;
-                if (selectionBoxHelper) {
-                    scene.remove(selectionBoxHelper);
-                    selectionBoxHelper.dispose();
-                    selectionBoxHelper = null;
-                }
-                document.querySelectorAll(".bone-item.active").forEach((item) => item.classList.remove("active"));
+                deselectBone();
             }
         }
     });
 
     window.addEventListener("keydown", function (event) {
-        if (event.ctrlKey && event.key.toLowerCase() === "z") {
+        const key = event.key.toLowerCase();
+        // hindari shortcut aktif saat user sedang mengetik di input/select/button
+        const tagName = event.target.tagName?.toLowerCase();
+        const isTypingTarget =
+            tagName === "input" ||
+            tagName === "select" ||
+            tagName === "textarea" ||
+            event.target.isContentEditable;
+        if (isTypingTarget) return;
+        if (event.ctrlKey && key === "z") {
             event.preventDefault();
             undo();
+            return;
         }
-        if (event.ctrlKey && event.key.toLowerCase() === "y") {
+        if (event.ctrlKey && key === "y") {
             event.preventDefault();
             redo();
+            return;
+        }
+        if (key === "w") {
+            event.preventDefault();
+            setTransformMode("translate");
+            return;
+        }
+        if (key === "e") {
+            event.preventDefault();
+            setTransformMode("rotate");
+            return;
+        }
+        if (key === "r") {
+            event.preventDefault();
+            setTransformMode("scale");
+            return;
+        }
+        if (key === "q") {
+            event.preventDefault();
+            toggleTransformSpace();
+            return;
+        }
+        if (key === "escape") {
+            event.preventDefault();
+            deselectBone();
+            return;
         }
     });
 
@@ -365,14 +426,7 @@ function main() {
 
     async function loadAndRender(geo, textureUrl) {
         if (!geo || !textureUrl) return;
-        transformControls.detach();
-        selectedBoneName = null;
-        if (selectionBoxHelper) {
-            scene.remove(selectionBoxHelper);
-            selectionBoxHelper.dispose();
-            selectionBoxHelper = null;
-        }
-        document.querySelectorAll(".bone-item.active").forEach((item) => item.classList.remove("active"));
+        deselectBone();
         const bones = await loadModelAndTexture(modelContainer, geo, textureUrl, camera, controls);
         draggableObjects = bones;
         if (geo.bones && geo.bones.length > 0) {
