@@ -79,6 +79,43 @@
                     <div id="bone-list" class="bone-list-style"></div>
                 </div> -->
             </div>
+            <details id="relayPanel" class="control-group relay-panel">
+                <summary class="group-label relay-summary">Bedrock3DLab Relay</summary>
+                <label class="relay-field">
+                    <span>Relay WS URL</span>
+                    <input
+                        id="relayUrlInput"
+                        type="text"
+                        value="ws://127.0.0.1:8787/ws"
+                        autocomplete="off"
+                    />
+                </label>
+                <div class="relay-row">
+                    <label class="relay-field">
+                        <span>Server ID</span>
+                        <input
+                            id="relayServerIdInput"
+                            type="text"
+                            value="demo"
+                            autocomplete="off"
+                        />
+                    </label>
+                    <label class="relay-field">
+                        <span>Pair Code</span>
+                        <input
+                            id="relayPairCodeInput"
+                            type="text"
+                            value="123456"
+                            autocomplete="off"
+                        />
+                    </label>
+                </div>
+                <div class="relay-actions">
+                    <button id="relayConnectBtn" class="action-button" type="button">Connect Relay</button>
+                    <button id="relayDisconnectBtn" class="action-button" type="button" disabled>Disconnect</button>
+                </div>
+                <p id="relayStatusText" class="relay-status">Relay: disconnected</p>
+            </details>
         </div>
         <div id="bone-menu-container" class="bone-panel hidden">
             <div class="controls-header">
@@ -100,9 +137,6 @@
             }
         </script>
 
-        <script type="module" src="main.js"></script>
-        <!-- <button id="screenshotBtn" style="position: absolute; top: 10px; left: 10px; z-index: 10">
-            Ambil Screenshot
-        </button> -->
+        <script type="module" src="./main.js"></script>
     </body>
 </html>

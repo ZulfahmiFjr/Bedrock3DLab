@@ -7,6 +7,14 @@ const boneMenuContainer = document.getElementById("bone-menu-container");
 const boneList = document.getElementById("bone-list");
 const boneMenuToggle = document.getElementById("bone-menu-toggle");
 const closeBonePanelBtn = document.getElementById("close-bone-panel");
+const relayUrlInput = document.getElementById("relayUrlInput");
+const relayServerIdInput = document.getElementById("relayServerIdInput");
+const relayPairCodeInput = document.getElementById("relayPairCodeInput");
+const relayConnectBtn = document.getElementById("relayConnectBtn");
+const relayDisconnectBtn = document.getElementById("relayDisconnectBtn");
+const relayStatusText = document.getElementById("relayStatusText");
+
+let bedrock3dRelaySocket = null;
 let boneMap = new Map();
 const undoStack = [];
 const redoStack = [];
@@ -845,6 +853,8 @@ function main() {
     exportJsonBtn.addEventListener("click", exportEditedJson);
     const screenshotBtn = document.getElementById("screenshotBtn");
     screenshotBtn.addEventListener("click", takeScreenshot);
+    relayConnectBtn?.addEventListener("click", connectBedrock3DRelay);
+    relayDisconnectBtn?.addEventListener("click", disconnectBedrock3DRelay);
     const requestedSampleModel = getRequestedSampleModel();
     if (requestedSampleModel) {
         autoLoadSampleModel(requestedSampleModel);
@@ -883,8 +893,93 @@ function main() {
         renderer.setViewport(0, 0, size.x, size.y);
     }
 
-    animate();
+    function setRelayStatus(message) {
+        if (relayStatusText) {
+            relayStatusText.textContent = `Relay: ${message}`;
+        }
+    }
 
+    function buildRelayWebSocketUrl() {
+        const relayUrl = relayUrlInput?.value?.trim() || "ws://127.0.0.1:8787/ws";
+        const serverId = relayServerIdInput?.value?.trim() || "demo";
+        const pairCode = relayPairCodeInput?.value?.trim() || "123456";
+        const url = new URL(relayUrl);
+        url.searchParams.set("role", "web");
+        url.searchParams.set("serverId", serverId);
+        url.searchParams.set("pairCode", pairCode);
+        return url.toString();
+    }
+
+    function connectBedrock3DRelay() {
+        if (bedrock3dRelaySocket && bedrock3dRelaySocket.readyState === WebSocket.OPEN) {
+            setRelayStatus("already connected");
+            return;
+        }
+        const wsUrl = buildRelayWebSocketUrl();
+        bedrock3dRelaySocket = new WebSocket(wsUrl);
+        setRelayStatus("connecting...");
+        if (relayConnectBtn) relayConnectBtn.disabled = true;
+        if (relayDisconnectBtn) relayDisconnectBtn.disabled = false;
+        bedrock3dRelaySocket.addEventListener("open", () => {
+            setRelayStatus("connected");
+        });
+        bedrock3dRelaySocket.addEventListener("message", handleBedrock3DRelayMessage);
+        bedrock3dRelaySocket.addEventListener("error", () => {
+            setRelayStatus("error, check console");
+            console.error("[Bedrock3DLab Relay] WebSocket error");
+        });
+        bedrock3dRelaySocket.addEventListener("close", () => {
+            setRelayStatus("disconnected");
+            if (relayConnectBtn) relayConnectBtn.disabled = false;
+            if (relayDisconnectBtn) relayDisconnectBtn.disabled = true;
+            bedrock3dRelaySocket = null;
+        });
+    }
+
+    function disconnectBedrock3DRelay() {
+        if (!bedrock3dRelaySocket) {
+            setRelayStatus("already disconnected");
+            return;
+        }
+        bedrock3dRelaySocket.close();
+    }
+
+    async function handleBedrock3DRelayMessage(event) {
+        let envelope;
+        try {
+            envelope = JSON.parse(event.data);
+        } catch (error) {
+            console.warn("[Bedrock3DLab Relay] Non-JSON message ignored:", event.data);
+            return;
+        }
+        console.log("[Bedrock3DLab Relay] Received:", envelope);
+        if (envelope.type === "relay.ready") {
+            setRelayStatus("ready");
+            return;
+        }
+        if (envelope.type === "plugin.connected") {
+            setRelayStatus("plugin online");
+            return;
+        }
+        if (envelope.type === "plugin.disconnected") {
+            setRelayStatus("plugin offline");
+            return;
+        }
+        if (envelope.type !== "from.plugin") {
+            return;
+        }
+        const message = envelope.message;
+        if (!message || typeof message !== "object") {
+            console.warn("[Bedrock3DLab Relay] Invalid plugin message:", envelope);
+            return;
+        }
+        if (message.type === "player.skin.response") {
+            console.log("[Bedrock3DLab Relay] Skin response received:", message.data);
+            setRelayStatus("skin response received");
+        }
+    }
+
+    animate();
 }
 
 function undo() {
