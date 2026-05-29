@@ -13,6 +13,11 @@ const relayPairCodeInput = document.getElementById("relayPairCodeInput");
 const relayConnectBtn = document.getElementById("relayConnectBtn");
 const relayDisconnectBtn = document.getElementById("relayDisconnectBtn");
 const relayStatusText = document.getElementById("relayStatusText");
+const relayPayloadInfo = document.getElementById("relayPayloadInfo");
+const relayPayloadPlayer = document.getElementById("relayPayloadPlayer");
+const relayPayloadSkinId = document.getElementById("relayPayloadSkinId");
+const relayPayloadTextureSize = document.getElementById("relayPayloadTextureSize");
+const relayPayloadGeometry = document.getElementById("relayPayloadGeometry");
 
 let bedrock3dRelaySocket = null;
 let boneMap = new Map();
@@ -421,7 +426,14 @@ function main() {
         );
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.putImageData(imageData, 0, 0);
-        return canvas.toDataURL("image/png");
+        return {
+            dataUrl: canvas.toDataURL("image/png"),
+            width: skinSize.canvasWidth,
+            height: skinSize.canvasHeight,
+            sourceWidth: skinSize.sourceWidth,
+            sourceHeight: skinSize.sourceHeight,
+            byteLength: rgbaBytes.byteLength,
+        };
     }
 
     async function loadGeometryJsonForSkinResponse(data) {
@@ -1000,6 +1012,37 @@ function main() {
         }
     }
 
+    function setRelayPayloadInfo({
+        playerName,
+        skinId,
+        textureSize,
+        geometryLabel,
+    }) {
+        if (!relayPayloadInfo) return;
+        if (relayPayloadPlayer) {
+            relayPayloadPlayer.textContent = playerName || "-";
+        }
+        if (relayPayloadSkinId) {
+            relayPayloadSkinId.textContent = skinId || "-";
+        }
+        if (relayPayloadTextureSize) {
+            relayPayloadTextureSize.textContent = textureSize || "-";
+        }
+        if (relayPayloadGeometry) {
+            relayPayloadGeometry.textContent = geometryLabel || "-";
+        }
+        relayPayloadInfo.classList.remove("is-hidden");
+    }
+
+    function clearRelayPayloadInfo() {
+        if (!relayPayloadInfo) return;
+        if (relayPayloadPlayer) relayPayloadPlayer.textContent = "-";
+        if (relayPayloadSkinId) relayPayloadSkinId.textContent = "-";
+        if (relayPayloadTextureSize) relayPayloadTextureSize.textContent = "-";
+        if (relayPayloadGeometry) relayPayloadGeometry.textContent = "-";
+        relayPayloadInfo.classList.add("is-hidden");
+    }
+
     function buildRelayWebSocketUrl() {
         const relayUrl = relayUrlInput?.value?.trim() || "ws://127.0.0.1:8787/ws";
         const serverId = relayServerIdInput?.value?.trim() || "demo";
@@ -1017,6 +1060,7 @@ function main() {
             return;
         }
         const wsUrl = buildRelayWebSocketUrl();
+        clearRelayPayloadInfo();
         bedrock3dRelaySocket = new WebSocket(wsUrl);
         setRelayStatus("connecting...");
         if (relayConnectBtn) relayConnectBtn.disabled = true;
@@ -1052,7 +1096,10 @@ function main() {
                 throw new Error("player.skin.response tidak punya skinData.");
             }
             setRelayStatus("decoding PMMP skin...");
-            const decodedTextureDataUrl = skinDataBase64ToPngDataUrl(data.skinData);
+            const decodedTexture = skinDataBase64ToPngDataUrl(data.skinData);
+            const decodedTextureDataUrl = decodedTexture.dataUrl;
+            const hasCustomGeometryData =
+                typeof data.geometryData === "string" && data.geometryData.trim() !== "";
             const geometryJson = await loadGeometryJsonForSkinResponse(data);
             const geometries = geometryJson["minecraft:geometry"];
             const selectedGeometryIndex = findGeometryIndexForSkinResponse(
@@ -1082,6 +1129,14 @@ function main() {
                 geometrySelector.value = String(selectedGeometryIndex);
             }
             await loadAndRender(selectedGeometry, textureDataURL, selectedGeometryIndex);
+            setRelayPayloadInfo({
+                playerName: data.playerName || data.playerUuid || "-",
+                skinId: data.skinId || "-",
+                textureSize: `${decodedTexture.width}x${decodedTexture.height}`,
+                geometryLabel: hasCustomGeometryData
+                    ? (data.geometryName || "custom geometry")
+                    : "default player",
+            });
             setRelayStatus(
                 data.playerName
                     ? `rendered skin: ${data.playerName}`

@@ -449,3 +449,37 @@ body {
 .controls::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.28);
 }
+
+.relay-payload-info {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.relay-payload-info.is-hidden {
+    display: none;
+}
+
+.relay-info-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    font-size: 12px;
+}
+
+.relay-info-row span {
+    color: #a0a0a5;
+    white-space: nowrap;
+}
+
+.relay-info-row strong {
+    color: #f5f5f7;
+    font-weight: 600;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
