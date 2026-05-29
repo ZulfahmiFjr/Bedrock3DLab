@@ -302,6 +302,7 @@ function main() {
             displayName: "Sniffer",
         },
     };
+    const DEFAULT_PLAYER_GEOMETRY_URL = "assets/player.json";
 
     function getRequestedSampleModel() {
         const params = new URLSearchParams(window.location.search);
@@ -353,6 +354,106 @@ function main() {
             console.error("Gagal auto-load sample model:", error);
             alert(`Gagal memuat sample model: ${modelKey}`);
         }
+    }
+
+    function decodeBase64ToUint8Array(base64) {
+        const cleanBase64 = String(base64 || "").trim();
+        if (!cleanBase64) {
+            throw new Error("skinData kosong.");
+        }
+        const binary = atob(cleanBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    function detectBedrockSkinSize(byteLength) {
+        if (byteLength === 8192) {
+            return {
+                sourceWidth: 64,
+                sourceHeight: 32,
+                canvasWidth: 64,
+                canvasHeight: 64,
+            };
+        }
+        if (byteLength === 16384) {
+            return {
+                sourceWidth: 64,
+                sourceHeight: 64,
+                canvasWidth: 64,
+                canvasHeight: 64,
+            };
+        }
+        if (byteLength === 65536) {
+            return {
+                sourceWidth: 128,
+                sourceHeight: 128,
+                canvasWidth: 128,
+                canvasHeight: 128,
+            };
+        }
+        throw new Error(`Ukuran skinData tidak didukung: ${byteLength} bytes.`);
+    }
+
+    function skinDataBase64ToPngDataUrl(skinDataBase64) {
+        const rgbaBytes = decodeBase64ToUint8Array(skinDataBase64);
+        const skinSize = detectBedrockSkinSize(rgbaBytes.byteLength);
+        console.log("[Bedrock3DLab Relay] Decoded skinData:", {
+            byteLength: rgbaBytes.byteLength,
+            sourceWidth: skinSize.sourceWidth,
+            sourceHeight: skinSize.sourceHeight,
+            canvasWidth: skinSize.canvasWidth,
+            canvasHeight: skinSize.canvasHeight,
+        });
+        const canvas = document.createElement("canvas");
+        canvas.width = skinSize.canvasWidth;
+        canvas.height = skinSize.canvasHeight;
+        const context = canvas.getContext("2d");
+        if (!context) {
+            throw new Error("Canvas 2D context tidak tersedia.");
+        }
+        const imageData = new ImageData(
+            new Uint8ClampedArray(rgbaBytes),
+            skinSize.sourceWidth,
+            skinSize.sourceHeight
+        );
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.putImageData(imageData, 0, 0);
+        return canvas.toDataURL("image/png");
+    }
+
+    async function loadGeometryJsonForSkinResponse(data) {
+        const geometryData = data.geometryData;
+        if (typeof geometryData === "string" && geometryData.trim() !== "") {
+            try {
+                return JSON.parse(geometryData);
+            } catch (error) {
+                throw new Error("geometryData ada, tapi bukan JSON valid.");
+            }
+        }
+        const response = await fetch(DEFAULT_PLAYER_GEOMETRY_URL);
+        if (!response.ok) {
+            throw new Error(`Gagal load default player geometry: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    function findGeometryIndexForSkinResponse(geometries, preferredGeometryName) {
+        if (!Array.isArray(geometries) || geometries.length === 0) {
+            throw new Error("Geometry JSON tidak punya minecraft:geometry yang valid.");
+        }
+        const cleanPreferredName = String(preferredGeometryName || "").trim();
+        if (!cleanPreferredName) {
+            return 0;
+        }
+        const matchedIndex = geometries.findIndex((geo) => {
+            const identifier = geo.description?.identifier || "";
+            const geometryName = geo.description?.geometry_name || "";
+            return identifier === cleanPreferredName || geometryName === cleanPreferredName;
+        });
+        return matchedIndex >= 0 ? matchedIndex : 0;
     }
 
     jsonInput.addEventListener("change", (event) => {
@@ -944,6 +1045,61 @@ function main() {
         bedrock3dRelaySocket.close();
     }
 
+    async function handlePlayerSkinResponseFromRelay(message) {
+        const data = message.data || {};
+        try {
+            if (!data.skinData) {
+                throw new Error("player.skin.response tidak punya skinData.");
+            }
+            setRelayStatus("decoding PMMP skin...");
+            const decodedTextureDataUrl = skinDataBase64ToPngDataUrl(data.skinData);
+            const geometryJson = await loadGeometryJsonForSkinResponse(data);
+            const geometries = geometryJson["minecraft:geometry"];
+            const selectedGeometryIndex = findGeometryIndexForSkinResponse(
+                geometries,
+                data.geometryName
+            );
+            const selectedGeometry = geometries[selectedGeometryIndex];
+            modelData = geometryJson;
+            textureDataURL = decodedTextureDataUrl;
+            loadedJsonFileName = data.geometryName
+                ? `${data.geometryName}.json`
+                : "pmmp_player.json";
+            activeGeometryIndex = null;
+            activeGeometryIdentifier = "geometry";
+            jsonFileLabel.textContent = data.geometryName || "PMMP Player";
+            textureFileLabel.textContent = data.playerName
+                ? `${data.playerName} skin`
+                : "PMMP Skin";
+            if (geometries.length === 1) {
+                geometrySelectorGroup.classList.add("hidden");
+                geometrySelectorGroup.style.display = "none";
+                geometrySelector.innerHTML = "";
+            } else {
+                populateGeometrySelector(geometries);
+                geometrySelectorGroup.classList.remove("hidden");
+                geometrySelectorGroup.style.display = "block";
+                geometrySelector.value = String(selectedGeometryIndex);
+            }
+            await loadAndRender(selectedGeometry, textureDataURL, selectedGeometryIndex);
+            setRelayStatus(
+                data.playerName
+                    ? `rendered skin: ${data.playerName}`
+                    : "rendered PMMP skin"
+            );
+            console.log("[Bedrock3DLab Relay] Rendered PMMP skin:", {
+                playerName: data.playerName,
+                playerUuid: data.playerUuid,
+                skinId: data.skinId,
+                geometryName: data.geometryName,
+                selectedGeometryIndex,
+            });
+        } catch (error) {
+            setRelayStatus("failed to render PMMP skin");
+            console.error("[Bedrock3DLab Relay] Failed to render PMMP skin:", error);
+        }
+    }
+
     async function handleBedrock3DRelayMessage(event) {
         let envelope;
         try {
@@ -975,7 +1131,8 @@ function main() {
         }
         if (message.type === "player.skin.response") {
             console.log("[Bedrock3DLab Relay] Skin response received:", message.data);
-            setRelayStatus("skin response received");
+            await handlePlayerSkinResponseFromRelay(message);
+            return;
         }
     }
 
