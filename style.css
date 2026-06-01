@@ -464,7 +464,7 @@ body {
 
 .relay-info-row {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
     gap: 12px;
     padding: 4px 0;
     font-size: 12px;
@@ -473,6 +473,7 @@ body {
 .relay-info-row span {
     color: #a0a0a5;
     white-space: nowrap;
+    flex: 0 0 82px;
 }
 
 .relay-info-row strong {
@@ -482,4 +483,24 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.relay-info-row strong.relay-scroll-value {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 205px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    text-overflow: clip;
+    text-align: left;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 0;
+    cursor: ew-resize;
+}
+
+.relay-info-row strong.relay-scroll-value::-webkit-scrollbar {
+    display: none;
 }

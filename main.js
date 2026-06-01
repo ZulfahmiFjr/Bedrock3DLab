@@ -307,7 +307,7 @@ function main() {
             displayName: "Sniffer",
         },
     };
-    const DEFAULT_PLAYER_GEOMETRY_URL = "assets/player.json";
+    const DEFAULT_PLAYER_GEOMETRY_URL = "assets/players.json";
 
     function getRequestedSampleModel() {
         const params = new URLSearchParams(window.location.search);
@@ -452,20 +452,45 @@ function main() {
         return await response.json();
     }
 
-    function findGeometryIndexForSkinResponse(geometries, preferredGeometryName) {
+    function getPreferredGeometryNameForSkinResponse(data) {
+        const geometryName = String(data.geometryName || "").trim();
+        const skinId = String(data.skinId || "").trim();
+        if (geometryName) {
+            return geometryName;
+        }
+        if (skinId.toLowerCase().includes("slim")) {
+            return "geometry.humanoid.customSlim";
+        }
+        return "geometry.humanoid.custom";
+    }
+
+    function findGeometryIndexForSkinResponse(geometries, data) {
         if (!Array.isArray(geometries) || geometries.length === 0) {
             throw new Error("Geometry JSON tidak punya minecraft:geometry yang valid.");
         }
-        const cleanPreferredName = String(preferredGeometryName || "").trim();
-        if (!cleanPreferredName) {
-            return 0;
-        }
-        const matchedIndex = geometries.findIndex((geo) => {
+        const preferredGeometryName = getPreferredGeometryNameForSkinResponse(data);
+        const exactMatchIndex = geometries.findIndex((geo) => {
             const identifier = geo.description?.identifier || "";
             const geometryName = geo.description?.geometry_name || "";
-            return identifier === cleanPreferredName || geometryName === cleanPreferredName;
+            return identifier === preferredGeometryName || geometryName === preferredGeometryName;
         });
-        return matchedIndex >= 0 ? matchedIndex : 0;
+        if (exactMatchIndex >= 0) {
+            return exactMatchIndex;
+        }
+        const classicFallbackIndex = geometries.findIndex((geo) => {
+            const identifier = geo.description?.identifier || "";
+            const geometryName = geo.description?.geometry_name || "";
+            return identifier === "geometry.humanoid.custom" || geometryName === "geometry.humanoid.custom";
+        });
+        if (classicFallbackIndex >= 0) {
+            return classicFallbackIndex;
+        }ss
+        const firstNonCapeIndex = geometries.findIndex((geo) => {
+            const identifier = geo.description?.identifier || "";
+            const geometryName = geo.description?.geometry_name || "";
+            return identifier !== "geometry.cape" && geometryName !== "geometry.cape";
+        });
+        return firstNonCapeIndex >= 0 ? firstNonCapeIndex : 0;
     }
 
     jsonInput.addEventListener("change", (event) => {
@@ -1024,12 +1049,14 @@ function main() {
         }
         if (relayPayloadSkinId) {
             relayPayloadSkinId.textContent = skinId || "-";
+            relayPayloadSkinId.title = skinId || "-";
         }
         if (relayPayloadTextureSize) {
             relayPayloadTextureSize.textContent = textureSize || "-";
         }
         if (relayPayloadGeometry) {
             relayPayloadGeometry.textContent = geometryLabel || "-";
+            relayPayloadGeometry.title = geometryLabel || "-";
         }
         relayPayloadInfo.classList.remove("is-hidden");
     }
@@ -1104,9 +1131,16 @@ function main() {
             const geometries = geometryJson["minecraft:geometry"];
             const selectedGeometryIndex = findGeometryIndexForSkinResponse(
                 geometries,
-                data.geometryName
+                data
             );
             const selectedGeometry = geometries[selectedGeometryIndex];
+            const selectedGeometryIdentifier =
+                selectedGeometry.description?.identifier ||
+                selectedGeometry.description?.geometry_name ||
+                "unknown geometry";
+            const geometryLabel = hasCustomGeometryData
+                ? selectedGeometryIdentifier
+                : `${selectedGeometryIdentifier} fallback`;
             modelData = geometryJson;
             textureDataURL = decodedTextureDataUrl;
             loadedJsonFileName = data.geometryName
@@ -1133,9 +1167,7 @@ function main() {
                 playerName: data.playerName || data.playerUuid || "-",
                 skinId: data.skinId || "-",
                 textureSize: `${decodedTexture.width}x${decodedTexture.height}`,
-                geometryLabel: hasCustomGeometryData
-                    ? (data.geometryName || "custom geometry")
-                    : "default player",
+                geometryLabel,
             });
             setRelayStatus(
                 data.playerName
