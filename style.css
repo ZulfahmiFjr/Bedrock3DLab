@@ -504,3 +504,14 @@ body {
 .relay-info-row strong.relay-scroll-value::-webkit-scrollbar {
     display: none;
 }
+
+.relay-info-row strong.relay-scroll-value {
+    mask-image: linear-gradient(to right, black 0%, black 88%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, black 0%, black 88%, transparent 100%);
+}
+
+.relay-info-row strong.relay-scroll-value:hover,
+.relay-info-row strong.relay-scroll-value:focus {
+    mask-image: none;
+    -webkit-mask-image: none;
+}

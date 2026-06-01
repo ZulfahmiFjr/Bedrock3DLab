@@ -1046,6 +1046,7 @@ function main() {
         if (!relayPayloadInfo) return;
         if (relayPayloadPlayer) {
             relayPayloadPlayer.textContent = playerName || "-";
+            relayPayloadPlayer.title = playerName || "-";
         }
         if (relayPayloadSkinId) {
             relayPayloadSkinId.textContent = skinId || "-";
@@ -1053,6 +1054,7 @@ function main() {
         }
         if (relayPayloadTextureSize) {
             relayPayloadTextureSize.textContent = textureSize || "-";
+            relayPayloadTextureSize.title = textureSize || "-";
         }
         if (relayPayloadGeometry) {
             relayPayloadGeometry.textContent = geometryLabel || "-";
