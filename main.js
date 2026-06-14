@@ -18,8 +18,12 @@ const relayPayloadPlayer = document.getElementById("relayPayloadPlayer");
 const relayPayloadSkinId = document.getElementById("relayPayloadSkinId");
 const relayPayloadTextureSize = document.getElementById("relayPayloadTextureSize");
 const relayPayloadGeometry = document.getElementById("relayPayloadGeometry");
+const relayPlayersInfo = document.getElementById("relayPlayersInfo");
+const relayPlayersCount = document.getElementById("relayPlayersCount");
+const relayPlayersList = document.getElementById("relayPlayersList");
 
 let bedrock3dRelaySocket = null;
+let relayPlayersSnapshot = [];
 let boneMap = new Map();
 const undoStack = [];
 const redoStack = [];
@@ -484,7 +488,7 @@ function main() {
         });
         if (classicFallbackIndex >= 0) {
             return classicFallbackIndex;
-        }ss
+        }
         const firstNonCapeIndex = geometries.findIndex((geo) => {
             const identifier = geo.description?.identifier || "";
             const geometryName = geo.description?.geometry_name || "";
@@ -1072,6 +1076,144 @@ function main() {
         relayPayloadInfo.classList.add("is-hidden");
     }
 
+    function clearRelayPlayersInfo() {
+        relayPlayersSnapshot = [];
+        if (relayPlayersInfo) {
+            relayPlayersInfo.classList.add("is-hidden");
+        }
+        if (relayPlayersCount) {
+            relayPlayersCount.textContent = "0";
+        }
+        if (relayPlayersList) {
+            relayPlayersList.textContent = "";
+        }
+    }
+
+    function normalizeRelayPlayer(player, fallbackOnline = true) {
+        if (!player || typeof player !== "object") {
+            return null;
+        }
+        const playerName = String(player.name || player.playerName || "").trim();
+        const playerUuid =
+            typeof player.uuid === "string"
+                ? player.uuid
+                : typeof player.playerUuid === "string"
+                ? player.playerUuid
+                : "";
+        if (!playerName && !playerUuid) {
+            return null;
+        }
+        return {
+            name: playerName || "Unknown",
+            uuid: playerUuid,
+            online: typeof player.online === "boolean" ? player.online : fallbackOnline,
+        };
+    }
+
+    function isSameRelayPlayer(a, b) {
+        if (!a || !b) return false;
+        if (a.uuid && b.uuid && a.uuid === b.uuid) {
+            return true;
+        }
+        return a.name !== "" && b.name !== "" && a.name === b.name;
+    }
+
+    function setRelayPlayersInfo(players) {
+        if (!relayPlayersInfo || !relayPlayersList || !relayPlayersCount) {
+            return;
+        }
+        const safePlayers = Array.isArray(players)
+            ? players
+                .map((player) => normalizeRelayPlayer(player, true))
+                .filter(Boolean)
+            : [];
+        relayPlayersSnapshot = safePlayers;
+        relayPlayersList.textContent = "";
+        relayPlayersCount.textContent = String(safePlayers.length);
+        if (safePlayers.length === 0) {
+            const emptyMessage = document.createElement("p");
+            emptyMessage.className = "relay-empty-message";
+            emptyMessage.textContent = "No players online.";
+            relayPlayersList.appendChild(emptyMessage);
+            relayPlayersInfo.classList.remove("is-hidden");
+            return;
+        }
+        for (const player of safePlayers) {
+            const playerName = String(player?.name || "Unknown");
+            const playerUuid = typeof player?.uuid === "string" ? player.uuid : "";
+            const isOnline = typeof player?.online === "boolean" ? player.online : true;
+            const row = document.createElement("div");
+            row.className = "relay-player-row";
+            const main = document.createElement("div");
+            main.className = "relay-player-main";
+            const nameElement = document.createElement("strong");
+            nameElement.className = "relay-player-name";
+            nameElement.textContent = playerName;
+            nameElement.title = playerName;
+            const uuidElement = document.createElement("span");
+            uuidElement.className = "relay-player-uuid";
+            uuidElement.textContent = playerUuid || "UUID unavailable";
+            uuidElement.title = playerUuid || "UUID unavailable";
+            const badge = document.createElement("span");
+            badge.className = isOnline
+                ? "relay-player-badge"
+                : "relay-player-badge offline";
+            badge.textContent = isOnline ? "online" : "offline";
+            main.appendChild(nameElement);
+            main.appendChild(uuidElement);
+            row.appendChild(main);
+            row.appendChild(badge);
+            relayPlayersList.appendChild(row);
+        }
+        relayPlayersInfo.classList.remove("is-hidden");
+    }
+
+    function upsertRelayPlayer(player) {
+        const normalizedPlayer = normalizeRelayPlayer(player, true);
+        if (!normalizedPlayer) {
+            return;
+        }
+        const existingIndex = relayPlayersSnapshot.findIndex((currentPlayer) =>
+            isSameRelayPlayer(currentPlayer, normalizedPlayer)
+        );
+        if (existingIndex >= 0) {
+            relayPlayersSnapshot[existingIndex] = {
+                ...relayPlayersSnapshot[existingIndex],
+                ...normalizedPlayer,
+                online: true,
+            };
+        } else {
+            relayPlayersSnapshot.push({
+                ...normalizedPlayer,
+                online: true,
+            });
+        }
+        setRelayPlayersInfo(relayPlayersSnapshot);
+    }
+
+    function markRelayPlayerOffline(player) {
+        const normalizedPlayer = normalizeRelayPlayer(player, false);
+        if (!normalizedPlayer) {
+            return;
+        }
+        const existingIndex = relayPlayersSnapshot.findIndex((currentPlayer) =>
+            isSameRelayPlayer(currentPlayer, normalizedPlayer)
+        );
+        if (existingIndex >= 0) {
+            relayPlayersSnapshot[existingIndex] = {
+                ...relayPlayersSnapshot[existingIndex],
+                ...normalizedPlayer,
+                online: false,
+            };
+        } else {
+            relayPlayersSnapshot.push({
+                ...normalizedPlayer,
+                online: false,
+            });
+        }
+        setRelayPlayersInfo(relayPlayersSnapshot);
+    }
+
     function buildRelayWebSocketUrl() {
         const relayUrl = relayUrlInput?.value?.trim() || "ws://127.0.0.1:8787/ws";
         const serverId = relayServerIdInput?.value?.trim() || "demo";
@@ -1090,6 +1232,7 @@ function main() {
         }
         const wsUrl = buildRelayWebSocketUrl();
         clearRelayPayloadInfo();
+        clearRelayPlayersInfo();
         bedrock3dRelaySocket = new WebSocket(wsUrl);
         setRelayStatus("connecting...");
         if (relayConnectBtn) relayConnectBtn.disabled = true;
@@ -1223,8 +1366,47 @@ function main() {
             await handlePlayerSkinResponseFromRelay(message);
             return;
         }
+        if (message.type === "server.players.response") {
+            console.log("[Bedrock3DLab Relay] Players response received:", message.data);
+            const players = Array.isArray(message.data?.players)
+                ? message.data.players
+                : [];
+            setRelayPlayersInfo(players);
+            setRelayStatus(
+                players.length === 1
+                    ? "received 1 online player"
+                    : `received ${players.length} online players`
+            );
+            return;
+        }
+        if (message.type === "server.event.player_join") {
+            console.log("[Bedrock3DLab Relay] Player join event received:", message.data);
+            upsertRelayPlayer({
+                name: message.data?.playerName || message.data?.name || "",
+                uuid: message.data?.playerUuid || message.data?.uuid || "",
+                online: true,
+            });
+            setRelayStatus(
+                message.data?.playerName
+                    ? `player joined: ${message.data.playerName}`
+                    : "player joined"
+            );
+            return;
+        }
+        if (message.type === "server.event.player_quit") {
+            console.log("[Bedrock3DLab Relay] Player quit event received:", message.data);
+            markRelayPlayerOffline({
+                name: message.data?.playerName || message.data?.name || "",
+                uuid: message.data?.playerUuid || message.data?.uuid || "",
+            });
+            setRelayStatus(
+                message.data?.playerName
+                    ? `player quit: ${message.data.playerName}`
+                    : "player quit"
+            );
+            return;
+        }
     }
-
     animate();
 }
 
