@@ -22,6 +22,10 @@ const WEB_TO_PLUGIN_TYPES = new Set([
     "player.skin.revert",
 ]);
 
+const WEB_TO_WEB_TYPES = new Set([
+    "editor.live.bones",
+]);
+
 const PLUGIN_TO_WEB_TYPES = new Set([
     "relay.pong",
     "server.status.response",
@@ -325,6 +329,28 @@ function validateMessageData(message) {
                 };
             }
             return { ok: true };
+        case "editor.live.bones":
+            if (!hasPlayerTarget(data)) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "MISSING_PLAYER_TARGET",
+                        "editor.live.bones requires playerUuid or playerName.",
+                        message.requestId
+                    ),
+                };
+            }
+            if (!Array.isArray(data.bones) || data.bones.length > 256) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "INVALID_BONES_PAYLOAD",
+                        "editor.live.bones requires data.bones as an array (max 256).",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
         case "player.skin.apply":
             if (!hasPlayerTarget(data)) {
                 return {
@@ -342,7 +368,50 @@ function validateMessageData(message) {
                     error: createRelayError("MISSING_SKIN_ID", "player.skin.apply requires skinId.", message.requestId),
                 };
             }
-            if (!isNonEmptyString(data.skinData)) {
+            if (data.live !== undefined && typeof data.live !== "boolean") {
+                return {
+                    ok: false,
+                    error: createRelayError("INVALID_LIVE_FLAG", "live must be a boolean when provided.", message.requestId),
+                };
+            }
+            if (data.reuseCurrentSkinData !== undefined && typeof data.reuseCurrentSkinData !== "boolean") {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "INVALID_REUSE_FLAG",
+                        "reuseCurrentSkinData must be a boolean when provided.",
+                        message.requestId
+                    ),
+                };
+            }
+            if (data.fullSync !== undefined && typeof data.fullSync !== "boolean") {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "INVALID_FULL_SYNC_FLAG",
+                        "fullSync must be a boolean when provided.",
+                        message.requestId
+                    ),
+                };
+            }
+            if (data.bones !== undefined && !Array.isArray(data.bones)) {
+                return {
+                    ok: false,
+                    error: createRelayError("INVALID_BONES_ARRAY", "bones must be an array when provided.", message.requestId),
+                };
+            }
+            if (data.reuseCurrentSkinData === true) {
+                if (data.skinData !== undefined && typeof data.skinData !== "string") {
+                    return {
+                        ok: false,
+                        error: createRelayError(
+                            "INVALID_SKIN_DATA",
+                            "skinData must be a string when provided.",
+                            message.requestId
+                        ),
+                    };
+                }
+            } else if (!isNonEmptyString(data.skinData)) {
                 return {
                     ok: false,
                     error: createRelayError(
@@ -544,10 +613,12 @@ export class ServerRoom extends DurableObject {
     acceptWebConnection(serverId) {
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair);
+        const clientId = `web_${crypto.randomUUID().slice(0, 8)}`;
         this.ctx.acceptWebSocket(server, ["web"]);
         server.serializeAttachment({
             role: "web",
             serverId,
+            clientId,
             connectedAt: new Date().toISOString(),
         });
         const pluginSockets = this.ctx.getWebSockets("plugin");
@@ -558,10 +629,20 @@ export class ServerRoom extends DurableObject {
             serverId,
             protocolVersion: 2,
             data: {
+                clientId,
+                webClients,
                 pluginOnline: pluginSockets.length > 0,
                 message: "Web connected to Bedrock3DLab room.",
                 supportedOutgoingTypes: [...WEB_TO_PLUGIN_TYPES],
                 supportedIncomingTypes: [...PLUGIN_TO_WEB_TYPES],
+                supportedWebToWebTypes: [...WEB_TO_WEB_TYPES],
+            },
+        });
+        this.broadcastToWeb({
+            type: "web.peers",
+            serverId,
+            data: {
+                webClients,
             },
         });
         this.broadcastToPlugin({
@@ -604,14 +685,33 @@ export class ServerRoom extends DurableObject {
                 this.safeSend(ws, validation.error);
                 return;
             }
-            this.broadcastToWeb({
+            const pluginEnvelope = {
                 type: "from.plugin",
                 serverId: meta.serverId,
                 message,
-            });
+            };
+            if (message.type === "player.skin.response" && isNonEmptyString(message.data?.targetClientId)) {
+                this.sendToWebClient(message.data.targetClientId, pluginEnvelope);
+                return;
+            }
+            this.broadcastToWeb(pluginEnvelope);
             return;
         }
         if (meta.role === "web") {
+            if (WEB_TO_WEB_TYPES.has(message.type)) {
+                const validation = validateMessageData(message);
+                if (!validation.ok) {
+                    this.safeSend(ws, validation.error);
+                    return;
+                }
+                this.broadcastToOtherWeb(ws, {
+                    type: "from.web",
+                    serverId: meta.serverId,
+                    sourceClientId: meta.clientId || null,
+                    message,
+                });
+                return;
+            }
             if (!WEB_TO_PLUGIN_TYPES.has(message.type)) {
                 this.safeSend(
                     ws,
@@ -636,11 +736,17 @@ export class ServerRoom extends DurableObject {
                 );
                 return;
             }
-            this.broadcastToPlugin({
+            const webEnvelope = {
                 type: "from.web",
                 serverId: meta.serverId,
+                sourceClientId: meta.clientId || null,
                 message,
-            });
+            };
+            this.broadcastToPlugin(webEnvelope);
+            // broadcast apply skin ke browser lain biar smua device langsung sync bareng
+            if (message.type === "player.skin.apply") {
+                this.broadcastToOtherWeb(ws, webEnvelope);
+            }
         }
     }
 
@@ -731,6 +837,13 @@ export class ServerRoom extends DurableObject {
         }
         if (meta.role === "web") {
             const remainingWeb = this.ctx.getWebSockets("web").filter((socket) => socket !== ws).length;
+            this.broadcastToOtherWeb(ws, {
+                type: "web.peers",
+                serverId: meta.serverId,
+                data: {
+                    webClients: remainingWeb,
+                },
+            });
             this.broadcastToPlugin({
                 type: "web.disconnected",
                 serverId: meta.serverId,
@@ -745,6 +858,27 @@ export class ServerRoom extends DurableObject {
         for (const socket of this.ctx.getWebSockets("web")) {
             this.safeSend(socket, message);
         }
+    }
+
+    broadcastToOtherWeb(excludeWs, message) {
+        for (const socket of this.ctx.getWebSockets("web")) {
+            if (socket !== excludeWs) {
+                this.safeSend(socket, message);
+            }
+        }
+    }
+
+    sendToWebClient(clientId, message) {
+        if (!clientId) return false;
+        let sent = false;
+        for (const socket of this.ctx.getWebSockets("web")) {
+            const meta = socket.deserializeAttachment() || {};
+            if (meta.clientId === clientId) {
+                this.safeSend(socket, message);
+                sent = true;
+            }
+        }
+        return sent;
     }
 
     broadcastToPlugin(message) {
@@ -778,6 +912,7 @@ export default {
                 },
                 messageTypes: {
                     webToPlugin: [...WEB_TO_PLUGIN_TYPES],
+                    webToWeb: [...WEB_TO_WEB_TYPES],
                     pluginToWeb: [...PLUGIN_TO_WEB_TYPES],
                     pluginControl: [...PLUGIN_CONTROL_TYPES],
                 },

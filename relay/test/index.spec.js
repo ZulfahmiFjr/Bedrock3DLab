@@ -97,6 +97,10 @@ describe("Bedrock3DLab Relay Worker", () => {
         expect(webReady.type).toBe("relay.ready");
         expect(webReady.data.pluginOnline).toBe(true);
 
+        const webPeersNotice = await web.nextMessage();
+        expect(webPeersNotice.type).toBe("web.peers");
+        expect(webPeersNotice.data.webClients).toBe(1);
+
         const webConnectedNotice = await plugin.nextMessage();
         expect(webConnectedNotice.type).toBe("web.connected");
 
@@ -148,6 +152,120 @@ describe("Bedrock3DLab Relay Worker", () => {
         const reuseOldCode = await openSocket(`/ws?role=web&serverId=${serverId}&pairCode=${pairCode}`);
         expect(reuseOldCode.status).toBe(401);
 
+        plugin.ws.close(1000, "test done");
+    });
+
+    it("broadcasts live bone sync, skin updates across web peers, and targets skin responses", async () => {
+        const serverId = "srv_e2e_live_01";
+        const secret = "sec_e2e_live_secret_1234567890abcd";
+
+        const plugin = await openSocket(`/ws?role=plugin&serverId=${serverId}&secret=${secret}`);
+        expect(plugin.status).toBe(101);
+        await plugin.nextMessage();
+
+        plugin.ws.send(JSON.stringify({ type: "relay.pair.create", requestId: "pair_live", data: { ttlSeconds: 300 } }));
+        const pairCreated = await plugin.nextMessage();
+        const pairCode = pairCreated.data.pairCode;
+
+        const webA = await openSocket(`/ws?role=web&serverId=${serverId}&pairCode=${pairCode}`);
+        expect(webA.status).toBe(101);
+        const readyA = await webA.nextMessage();
+        expect(readyA.type).toBe("relay.ready");
+        expect(typeof readyA.data.clientId).toBe("string");
+        expect(readyA.data.webClients).toBe(1);
+        const peersA1 = await webA.nextMessage();
+        expect(peersA1.type).toBe("web.peers");
+        expect(peersA1.data.webClients).toBe(1);
+        await plugin.nextMessage();
+
+        const webB = await openSocket(`/ws?role=web&serverId=${serverId}&pairCode=${pairCode}`);
+        expect(webB.status).toBe(101);
+        const readyB = await webB.nextMessage();
+        expect(readyB.type).toBe("relay.ready");
+        expect(typeof readyB.data.clientId).toBe("string");
+        expect(readyB.data.clientId).not.toBe(readyA.data.clientId);
+        expect(readyB.data.webClients).toBe(2);
+        const peersB2 = await webB.nextMessage();
+        expect(peersB2.type).toBe("web.peers");
+        expect(peersB2.data.webClients).toBe(2);
+        const peersA2 = await webA.nextMessage();
+        expect(peersA2.type).toBe("web.peers");
+        expect(peersA2.data.webClients).toBe(2);
+        await plugin.nextMessage();
+
+        // uji sinkron bone langsung antar device web
+        webA.ws.send(
+            JSON.stringify({
+                type: "editor.live.bones",
+                requestId: "live_bone_1",
+                data: {
+                    playerName: "Fajeray",
+                    bones: [{ name: "head", position: [0, 12, 0], quaternion: [0, 0, 0, 1], scale: [1, 1, 1] }],
+                },
+            })
+        );
+        const boneOnB = await webB.nextMessage();
+        expect(boneOnB.type).toBe("from.web");
+        expect(boneOnB.sourceClientId).toBe(readyA.data.clientId);
+        expect(boneOnB.message.type).toBe("editor.live.bones");
+        expect(boneOnB.message.data.bones[0].name).toBe("head");
+
+        // uji live apply tanpa skinData pas pake reuseCurrentSkinData
+        webA.ws.send(
+            JSON.stringify({
+                type: "player.skin.apply",
+                requestId: "live_apply_1",
+                data: {
+                    playerName: "Fajeray",
+                    skinId: "steve_b3d_live_1",
+                    geometryName: "geometry.humanoid.custom",
+                    geometryData: "{}",
+                    live: true,
+                    reuseCurrentSkinData: true,
+                    bones: [{ name: "head", position: [0, 12, 0], quaternion: [0, 0, 0, 1], scale: [1, 1, 1] }],
+                },
+            })
+        );
+        const applyOnPlugin = await plugin.nextMessage();
+        expect(applyOnPlugin.type).toBe("from.web");
+        expect(applyOnPlugin.sourceClientId).toBe(readyA.data.clientId);
+        expect(applyOnPlugin.message.type).toBe("player.skin.apply");
+        expect(applyOnPlugin.message.data.reuseCurrentSkinData).toBe(true);
+
+        const applyOnB = await webB.nextMessage();
+        expect(applyOnB.type).toBe("from.web");
+        expect(applyOnB.sourceClientId).toBe(readyA.data.clientId);
+        expect(applyOnB.message.type).toBe("player.skin.apply");
+
+        // uji routing player skin response cuma ke device yg minta kalo targetClientId diset
+        webA.ws.send(
+            JSON.stringify({
+                type: "player.skin.request",
+                requestId: "req_skin_1",
+                data: { playerName: "Fajeray" },
+            })
+        );
+        const skinReqPlugin = await plugin.nextMessage();
+        expect(skinReqPlugin.sourceClientId).toBe(readyA.data.clientId);
+        plugin.ws.send(
+            JSON.stringify({
+                type: "player.skin.response",
+                requestId: "req_skin_1",
+                data: {
+                    playerName: "Fajeray",
+                    skinId: "Standard_Custom",
+                    skinData: "AAAA",
+                    targetClientId: skinReqPlugin.sourceClientId,
+                },
+            })
+        );
+        const targetedToA = await webA.nextMessage();
+        expect(targetedToA.type).toBe("from.plugin");
+        expect(targetedToA.message.type).toBe("player.skin.response");
+        await expect(webB.nextMessage(150)).rejects.toThrow("Timed out");
+
+        webA.ws.close(1000, "test done");
+        webB.ws.close(1000, "test done");
         plugin.ws.close(1000, "test done");
     });
 });

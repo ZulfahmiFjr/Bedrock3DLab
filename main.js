@@ -21,6 +21,8 @@ const relayPayloadTextureSize = document.getElementById("relayPayloadTextureSize
 const relayPayloadGeometry = document.getElementById("relayPayloadGeometry");
 const relayApplyBtn = document.getElementById("relayApplyBtn");
 const relayRevertBtn = document.getElementById("relayRevertBtn");
+const relayLiveSyncToggle = document.getElementById("relayLiveSyncToggle");
+const relayPeersBadge = document.getElementById("relayPeersBadge");
 const relayPlayersInfo = document.getElementById("relayPlayersInfo");
 const relayPlayersCount = document.getElementById("relayPlayersCount");
 const relayRefreshPlayersBtn = document.getElementById("relayRefreshPlayersBtn");
@@ -31,9 +33,21 @@ const DEFAULT_LOCAL_RELAY_URL = "ws://127.0.0.1:8787/ws";
 
 let bedrock3dRelaySocket = null;
 let relayPluginOnline = false;
+let relayClientId = null;
 let relayPlayersSnapshot = [];
 let selectedRelayPlayerKey = "";
 let activeRelaySkinContext = null;
+let relayLiveSyncEnabled = Boolean(relayLiveSyncToggle ? relayLiveSyncToggle.checked : true);
+let relayTextureDirty = false;
+let isApplyingRemoteSync = false;
+let liveBoneSyncTimer = null;
+let liveSkinApplyTimer = null;
+let lastBoneSyncSentAt = 0;
+let lastSkinApplySentAt = 0;
+let liveSyncSeq = 0;
+let lastTransformFingerprint = "";
+const pendingBoneSyncNames = new Set();
+let pendingFullSkinSync = false;
 let boneMap = new Map();
 const undoStack = [];
 const redoStack = [];
@@ -111,6 +125,12 @@ function main() {
             transformControls.object.position.y = Math.round(transformControls.object.position.y);
             transformControls.object.position.z = Math.round(transformControls.object.position.z);
         }
+        const obj = transformControls.object;
+        const fp = `${obj.name}|${cleanNumber(obj.position.x)},${cleanNumber(obj.position.y)},${cleanNumber(obj.position.z)}|${cleanNumber(obj.quaternion.x)},${cleanNumber(obj.quaternion.y)},${cleanNumber(obj.quaternion.z)},${cleanNumber(obj.quaternion.w)}|${cleanNumber(obj.scale.x)},${cleanNumber(obj.scale.y)},${cleanNumber(obj.scale.z)}`;
+        if (fp !== lastTransformFingerprint) {
+            lastTransformFingerprint = fp;
+            scheduleLiveSync({ changedBoneName: obj.name, immediate: false });
+        }
     });
 
     transformControls.addEventListener("mouseDown", function () {
@@ -139,6 +159,8 @@ function main() {
                 if (changed) {
                     undoStack.push(actionInProgress);
                     redoStack.length = 0;
+                    lastTransformFingerprint = "";
+                    scheduleLiveSync({ changedBoneName: actionInProgress.boneName, immediate: true });
                 }
             }
             actionInProgress = null;
@@ -215,12 +237,18 @@ function main() {
         if (isTypingTarget) return;
         if (event.ctrlKey && key === "z") {
             event.preventDefault();
-            undo();
+            const mutatedBone = undo();
+            if (mutatedBone) {
+                scheduleLiveSync({ changedBoneName: mutatedBone, immediate: true });
+            }
             return;
         }
         if (event.ctrlKey && key === "y") {
             event.preventDefault();
-            redo();
+            const mutatedBone = redo();
+            if (mutatedBone) {
+                scheduleLiveSync({ changedBoneName: mutatedBone, immediate: true });
+            }
             return;
         }
         if (key === "w") {
@@ -569,7 +597,8 @@ function main() {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                modelData = JSON.parse(e.target.result);
+                const parsed = JSON.parse(e.target.result);
+                modelData = normalizeBedrockGeometryJson(parsed) || parsed;
                 console.log("File model.json berhasil diparsing.");
             } catch (err) {
                 alert("Error: File JSON tidak valid.");
@@ -585,14 +614,31 @@ function main() {
         if (!file) return;
         textureFileLabel.textContent = file.name;
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             textureDataURL = e.target.result;
+            relayTextureDirty = true;
+            if (modelData && activeGeometryIndex !== null && modelData["minecraft:geometry"]?.[activeGeometryIndex]) {
+                const activeGeo = modelData["minecraft:geometry"][activeGeometryIndex];
+                const savedBones = serializeAllBoneTransforms();
+                await loadAndRender(activeGeo, textureDataURL, activeGeometryIndex, {
+                    preserveCamera: true,
+                    preservePanels: true,
+                    preserveSelection: true,
+                    preserveUndo: true,
+                });
+                if (savedBones.length > 0) {
+                    applyBoneTransformsToScene(savedBones, false);
+                }
+                if (canLiveSyncToRelay()) {
+                    scheduleLiveSync({ immediate: true, fullSync: true });
+                }
+            }
             updateRelayActionButtons();
         };
         reader.readAsDataURL(file);
     });
 
-    loadBtn.addEventListener("click", () => {
+    loadBtn.addEventListener("click", async () => {
         if (!modelData || !textureDataURL) {
             alert("Harap pilih file model.json dan texture.png terlebih dahulu.");
             return;
@@ -602,11 +648,18 @@ function main() {
             alert("File JSON tidak berisi data geometri yang valid.");
             return;
         }
-       if (geometries.length === 1) {
+        if (geometries.length === 1) {
             geometrySelectorGroup.classList.add("hidden");
             geometrySelectorGroup.style.display = "none";
             geometrySelector.innerHTML = "";
-            loadAndRender(geometries[0], textureDataURL, 0);
+            await loadAndRender(geometries[0], textureDataURL, 0, {
+                preserveCamera: Boolean(activeRelaySkinContext),
+                preservePanels: Boolean(activeRelaySkinContext),
+            });
+            relayTextureDirty = true;
+            if (canLiveSyncToRelay()) {
+                scheduleLiveSync({ immediate: true, fullSync: true });
+            }
         } else {
             populateGeometrySelector(geometries);
             geometrySelectorGroup.classList.remove("hidden");
@@ -634,13 +687,20 @@ function main() {
             option.textContent = `${index + 1}. ${identifier}`;
             geometrySelector.appendChild(option);
         });
-        geometrySelector.onchange = (event) => {
+        geometrySelector.onchange = async (event) => {
             const selectedIndex = Number(event.target.value);
             if (!Number.isInteger(selectedIndex)) return;
             if (!geometries[selectedIndex]) return;
             const selectedGeo = geometries[selectedIndex];
-            // pake textureDataURL, bukan textureUrl.
-            loadAndRender(selectedGeo, textureDataURL, selectedIndex);
+            // pake textureDataURL, bukan textureUrl
+            await loadAndRender(selectedGeo, textureDataURL, selectedIndex, {
+                preserveCamera: Boolean(activeRelaySkinContext),
+                preservePanels: Boolean(activeRelaySkinContext),
+            });
+            relayTextureDirty = true;
+            if (canLiveSyncToRelay()) {
+                scheduleLiveSync({ immediate: true, fullSync: true });
+            }
         };
     }
 
@@ -713,23 +773,29 @@ function main() {
     //     menuToggleBtn.classList.remove("hidden");
     // }
 
-    async function loadAndRender(geo, textureUrl, geometryIndex = null) {
+    async function loadAndRender(geo, textureUrl, geometryIndex = null, options = {}) {
         if (!geo || !textureUrl) return;
+        const prevSelectedBone = options.preserveSelection ? selectedBoneName : null;
         activeGeometryIndex = geometryIndex;
         activeGeometryIdentifier =
             geo.description?.identifier ||
             geo.description?.geometry_name ||
             `geometry_${geometryIndex ?? 0}`;
         deselectBone();
-        const bones = await loadModelAndTexture(modelContainer, geo, textureUrl, camera, controls);
+        const bones = await loadModelAndTexture(modelContainer, geo, textureUrl, camera, controls, options);
         draggableObjects = bones;
         if (geo.bones && geo.bones.length > 0) {
             populateBoneMenu(geo.bones);
-            boneMenuToggle.classList.remove("hidden");
+            if (!options.preservePanels || boneMenuContainer.classList.contains("hidden")) {
+                boneMenuToggle.classList.remove("hidden");
+            }
         }
-        if (!controlsPanel.classList.contains("hidden")) {
+        if (!options.preservePanels && !controlsPanel.classList.contains("hidden")) {
             controlsPanel.classList.add("hidden");
             menuToggleBtn.classList.remove("hidden");
+        }
+        if (prevSelectedBone && boneMap.has(prevSelectedBone)) {
+            selectBoneByName(prevSelectedBone);
         }
     }
 
@@ -1072,8 +1138,26 @@ function main() {
     relayConnectBtn?.addEventListener("click", connectBedrock3DRelay);
     relayDisconnectBtn?.addEventListener("click", disconnectBedrock3DRelay);
     relayRefreshPlayersBtn?.addEventListener("click", requestRelayPlayers);
-    relayApplyBtn?.addEventListener("click", applyEditedSkinToRelay);
+    relayApplyBtn?.addEventListener("click", () => {
+        applyEditedSkinToRelay({ live: false, includeSkinData: true, fullSync: true });
+    });
     relayRevertBtn?.addEventListener("click", revertRelayPlayerSkin);
+    relayLiveSyncToggle?.addEventListener("change", () => {
+        relayLiveSyncEnabled = Boolean(relayLiveSyncToggle.checked);
+        if (relayLiveSyncEnabled) {
+            setRelayStatus("live sync on");
+        } else {
+            if (liveBoneSyncTimer) {
+                clearTimeout(liveBoneSyncTimer);
+                liveBoneSyncTimer = null;
+            }
+            if (liveSkinApplyTimer) {
+                clearTimeout(liveSkinApplyTimer);
+                liveSkinApplyTimer = null;
+            }
+            setRelayStatus("live sync paused");
+        }
+    });
     const requestedSampleModel = getRequestedSampleModel();
     if (requestedSampleModel) {
         autoLoadSampleModel(requestedSampleModel);
@@ -1117,6 +1201,12 @@ function main() {
         if (relayStatusText) {
             relayStatusText.textContent = `Relay: ${message}`;
         }
+    }
+
+    function setRelayPeersCount(count) {
+        if (!relayPeersBadge) return;
+        const total = Number.isFinite(Number(count)) && Number(count) > 0 ? Math.round(Number(count)) : 1;
+        relayPeersBadge.textContent = total === 1 ? "1 device" : `${total} devices`;
     }
 
     function setRelayPayloadInfo({
@@ -1320,23 +1410,207 @@ function main() {
         return uint8ArrayToBase64(new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength));
     }
 
-    async function applyEditedSkinToRelay() {
+    function getActiveTargetGeometryName() {
+        return (
+            activeGeometryIdentifier ||
+            activeRelaySkinContext?.geometryName ||
+            "geometry.humanoid.custom"
+        );
+    }
+
+    function canLiveSyncToRelay() {
+        return Boolean(
+            relayLiveSyncEnabled &&
+                !isApplyingRemoteSync &&
+                bedrock3dRelaySocket &&
+                bedrock3dRelaySocket.readyState === WebSocket.OPEN &&
+                relayPluginOnline &&
+                activeRelaySkinContext &&
+                (activeRelaySkinContext.playerUuid || activeRelaySkinContext.playerName) &&
+                modelData &&
+                textureDataURL &&
+                activeGeometryIndex !== null
+        );
+    }
+
+    function serializeBoneTransform(boneName) {
+        const obj = boneMap.get(boneName);
+        if (!obj) return null;
+        return {
+            name: boneName,
+            position: [
+                cleanNumber(obj.position.x, 4),
+                cleanNumber(obj.position.y, 4),
+                cleanNumber(obj.position.z, 4),
+            ],
+            quaternion: [
+                cleanNumber(obj.quaternion.x, 5),
+                cleanNumber(obj.quaternion.y, 5),
+                cleanNumber(obj.quaternion.z, 5),
+                cleanNumber(obj.quaternion.w, 5),
+            ],
+            scale: [
+                cleanNumber(obj.scale.x, 4),
+                cleanNumber(obj.scale.y, 4),
+                cleanNumber(obj.scale.z, 4),
+            ],
+        };
+    }
+
+    function serializeAllBoneTransforms() {
+        const result = [];
+        for (const boneName of boneMap.keys()) {
+            const serialized = serializeBoneTransform(boneName);
+            if (serialized) {
+                result.push(serialized);
+            }
+        }
+        return result;
+    }
+
+    function applyBoneTransformsToScene(bones, skipDraggingBone = true) {
+        if (!Array.isArray(bones)) return;
+        for (const entry of bones) {
+            if (!entry || typeof entry.name !== "string") continue;
+            if (skipDraggingBone && transformControls.dragging && transformControls.object?.name === entry.name) {
+                continue;
+            }
+            const obj = boneMap.get(entry.name);
+            if (!obj) continue;
+            if (Array.isArray(entry.position) && entry.position.length >= 3) {
+                obj.position.set(
+                    Number.isFinite(Number(entry.position[0])) ? Number(entry.position[0]) : obj.position.x,
+                    Number.isFinite(Number(entry.position[1])) ? Number(entry.position[1]) : obj.position.y,
+                    Number.isFinite(Number(entry.position[2])) ? Number(entry.position[2]) : obj.position.z
+                );
+            }
+            if (Array.isArray(entry.quaternion) && entry.quaternion.length >= 4) {
+                obj.quaternion.set(
+                    Number.isFinite(Number(entry.quaternion[0])) ? Number(entry.quaternion[0]) : obj.quaternion.x,
+                    Number.isFinite(Number(entry.quaternion[1])) ? Number(entry.quaternion[1]) : obj.quaternion.y,
+                    Number.isFinite(Number(entry.quaternion[2])) ? Number(entry.quaternion[2]) : obj.quaternion.z,
+                    Number.isFinite(Number(entry.quaternion[3])) ? Number(entry.quaternion[3]) : obj.quaternion.w
+                );
+            }
+            if (Array.isArray(entry.scale) && entry.scale.length >= 3) {
+                obj.scale.set(
+                    Number.isFinite(Number(entry.scale[0])) ? Number(entry.scale[0]) : obj.scale.x,
+                    Number.isFinite(Number(entry.scale[1])) ? Number(entry.scale[1]) : obj.scale.y,
+                    Number.isFinite(Number(entry.scale[2])) ? Number(entry.scale[2]) : obj.scale.z
+                );
+            }
+        }
+        if (selectionBoxHelper) {
+            selectionBoxHelper.update();
+        }
+    }
+
+    function applyRemoteBoneTransforms(bones) {
+        isApplyingRemoteSync = true;
+        try {
+            applyBoneTransformsToScene(bones, true);
+        } finally {
+            isApplyingRemoteSync = false;
+        }
+    }
+
+    function flushLiveBoneSync() {
+        if (liveBoneSyncTimer) {
+            clearTimeout(liveBoneSyncTimer);
+            liveBoneSyncTimer = null;
+        }
+        if (!canLiveSyncToRelay()) {
+            pendingBoneSyncNames.clear();
+            return;
+        }
+        const names = pendingBoneSyncNames.size > 0 ? [...pendingBoneSyncNames] : [...boneMap.keys()];
+        pendingBoneSyncNames.clear();
+        const bones = names.map((name) => serializeBoneTransform(name)).filter(Boolean);
+        if (bones.length === 0) return;
+        lastBoneSyncSentAt = Date.now();
+        sendRelayMessage("editor.live.bones", {
+            playerName: activeRelaySkinContext.playerName || "",
+            playerUuid: activeRelaySkinContext.playerUuid || "",
+            geometryName: getActiveTargetGeometryName(),
+            bones,
+        });
+    }
+
+    function flushLiveSkinApply() {
+        if (liveSkinApplyTimer) {
+            clearTimeout(liveSkinApplyTimer);
+            liveSkinApplyTimer = null;
+        }
+        if (!canLiveSyncToRelay()) {
+            pendingFullSkinSync = false;
+            return;
+        }
+        lastSkinApplySentAt = Date.now();
+        const wantFullSync = Boolean(relayTextureDirty || pendingFullSkinSync);
+        pendingFullSkinSync = false;
+        applyEditedSkinToRelay({
+            live: true,
+            includeSkinData: wantFullSync,
+            fullSync: wantFullSync,
+        });
+    }
+
+    function scheduleLiveSync({ changedBoneName = null, immediate = false, fullSync = false } = {}) {
+        if (!canLiveSyncToRelay()) return;
+        if (changedBoneName) {
+            pendingBoneSyncNames.add(changedBoneName);
+        } else {
+            for (const name of boneMap.keys()) {
+                pendingBoneSyncNames.add(name);
+            }
+        }
+        if (fullSync) {
+            pendingFullSkinSync = true;
+        }
+        if (immediate) {
+            flushLiveBoneSync();
+        } else if (!liveBoneSyncTimer) {
+            const waitBonesMs = Math.max(0, 50 - (Date.now() - lastBoneSyncSentAt));
+            liveBoneSyncTimer = setTimeout(flushLiveBoneSync, waitBonesMs);
+        }
+        if (immediate || fullSync) {
+            flushLiveSkinApply();
+        } else if (!liveSkinApplyTimer) {
+            const waitApplyMs = Math.max(0, 180 - (Date.now() - lastSkinApplySentAt));
+            liveSkinApplyTimer = setTimeout(flushLiveSkinApply, waitApplyMs);
+        }
+    }
+
+    async function applyEditedSkinToRelay(options = {}) {
+        const live = Boolean(options?.live);
+        const includeSkinData = options?.includeSkinData !== false;
+        const fullSync = options?.fullSync !== false;
         if (!activeRelaySkinContext) {
             setRelayStatus("select a relay player first");
             return;
         }
         const built = buildEditedGeometryData();
         if (built.error) {
-            alert(built.error);
+            if (!live) {
+                alert(built.error);
+            } else {
+                setRelayStatus(`live sync skipped: ${built.error}`);
+            }
             return;
         }
         try {
-            setRelayStatus(`applying skin to ${activeRelaySkinContext.playerName || "player"}...`);
-            const rawSkinBase64 = await textureDataUrlToRawSkinBase64(textureDataURL);
+            const targetLabel = activeRelaySkinContext.playerName || "player";
+            setRelayStatus(live ? `live syncing ${targetLabel}...` : `applying skin to ${targetLabel}...`);
+            let rawSkinBase64 = "";
+            if (includeSkinData) {
+                rawSkinBase64 = await textureDataUrlToRawSkinBase64(textureDataURL);
+            }
             const cleanBaseSkinId = (activeRelaySkinContext.skinId || "bedrock3dlab")
+                .replace(/_b3d_[0-9a-z]+_[0-9a-z]+$/i, "")
                 .replace(/_b3d_[0-9a-z]+$/i, "")
                 .replace(/_b3d$/i, "");
-            const editedSkinId = `${cleanBaseSkinId}_b3d_${Date.now().toString(36)}`;
+            liveSyncSeq += 1;
+            const editedSkinId = `${cleanBaseSkinId}_b3d_${Date.now().toString(36)}_${liveSyncSeq}`;
             const activeGeo = built.exportedData?.["minecraft:geometry"]?.[activeGeometryIndex];
             const payloadGeometryData = activeGeo
                 ? {
@@ -1344,21 +1618,45 @@ function main() {
                       "minecraft:geometry": [activeGeo],
                   }
                 : built.exportedData;
+            const geometryJsonStr = JSON.stringify(payloadGeometryData);
+            const targetGeometryName =
+                built.activeGeometryIdentifier ||
+                activeRelaySkinContext.geometryName ||
+                "geometry.humanoid.custom";
             const ok = sendRelayMessage("player.skin.apply", {
                 playerName: activeRelaySkinContext.playerName || "",
                 playerUuid: activeRelaySkinContext.playerUuid || "",
                 skinId: editedSkinId,
                 skinData: rawSkinBase64,
                 capeData: activeRelaySkinContext.capeData || "",
-                geometryName: built.activeGeometryIdentifier || activeRelaySkinContext.geometryName || "geometry.humanoid.custom",
-                geometryData: JSON.stringify(payloadGeometryData),
+                geometryName: targetGeometryName,
+                geometryData: geometryJsonStr,
+                bones: serializeAllBoneTransforms(),
+                live,
+                reuseCurrentSkinData: !includeSkinData,
+                fullSync,
             });
             if (!ok) {
                 setRelayStatus("failed to send skin apply");
+                return;
+            }
+            activeRelaySkinContext.skinId = editedSkinId;
+            activeRelaySkinContext.geometryName = targetGeometryName;
+            activeRelaySkinContext.geometryData = geometryJsonStr;
+            if (includeSkinData && rawSkinBase64) {
+                activeRelaySkinContext.skinData = rawSkinBase64;
+                activeRelaySkinContext.decodedDataUrl = textureDataURL;
+                relayTextureDirty = false;
+            }
+            if (relayPayloadSkinId) {
+                relayPayloadSkinId.textContent = editedSkinId;
+                relayPayloadSkinId.title = editedSkinId;
             }
         } catch (error) {
-            setRelayStatus("apply failed");
-            alert(error.message || "Gagal menyiapkan skin untuk dikirim ke server.");
+            setRelayStatus(live ? `live sync error: ${error.message || "failed"}` : "apply failed");
+            if (!live) {
+                alert(error.message || "Gagal menyiapkan skin untuk dikirim ke server.");
+            }
             console.error("[Bedrock3DLab Relay] Apply error:", error);
         }
     }
@@ -1400,10 +1698,14 @@ function main() {
 
     function isSameRelayPlayer(a, b) {
         if (!a || !b) return false;
-        if (a.uuid && b.uuid && a.uuid === b.uuid) {
+        const uuidA = String(a.uuid || a.playerUuid || "").trim();
+        const uuidB = String(b.uuid || b.playerUuid || "").trim();
+        if (uuidA && uuidB && uuidA === uuidB) {
             return true;
         }
-        return a.name !== "" && b.name !== "" && a.name === b.name;
+        const nameA = String(a.name || a.playerName || "").trim().toLowerCase();
+        const nameB = String(b.name || b.playerName || "").trim().toLowerCase();
+        return nameA !== "" && nameB !== "" && nameA === nameB;
     }
 
     function setRelayPlayersInfo(players) {
@@ -1560,6 +1862,16 @@ function main() {
         });
         bedrock3dRelaySocket.addEventListener("close", (event) => {
             relayPluginOnline = false;
+            relayClientId = null;
+            if (liveBoneSyncTimer) {
+                clearTimeout(liveBoneSyncTimer);
+                liveBoneSyncTimer = null;
+            }
+            if (liveSkinApplyTimer) {
+                clearTimeout(liveSkinApplyTimer);
+                liveSkinApplyTimer = null;
+            }
+            setRelayPeersCount(1);
             const reasonText = event?.reason ? ` (${event.reason})` : "";
             setRelayStatus(`disconnected${reasonText}`);
             if (relayConnectBtn) relayConnectBtn.disabled = false;
@@ -1577,13 +1889,16 @@ function main() {
         bedrock3dRelaySocket.close();
     }
 
-    async function handlePlayerSkinResponseFromRelay(message) {
+    async function handlePlayerSkinResponseFromRelay(message, options = {}) {
         const data = message.data || {};
+        isApplyingRemoteSync = true;
         try {
             if (!data.skinData) {
                 throw new Error("player.skin.response tidak punya skinData.");
             }
-            setRelayStatus("decoding PMMP skin...");
+            if (!options.remoteSync) {
+                setRelayStatus("decoding PMMP skin...");
+            }
             const decodedTexture = skinDataBase64ToPngDataUrl(data.skinData);
             const decodedTextureDataUrl = decodedTexture.dataUrl;
             const { geometryJson, usedFallback } = await loadGeometryJsonForSkinResponse(data);
@@ -1621,7 +1936,13 @@ function main() {
                 geometrySelectorGroup.style.display = "block";
                 geometrySelector.value = String(selectedGeometryIndex);
             }
-            await loadAndRender(selectedGeometry, textureDataURL, selectedGeometryIndex);
+            await loadAndRender(selectedGeometry, textureDataURL, selectedGeometryIndex, options);
+            if (Array.isArray(data.bones) && data.bones.length > 0) {
+                applyBoneTransformsToScene(data.bones, true);
+            }
+            relayTextureDirty = false;
+            pendingFullSkinSync = false;
+            lastTransformFingerprint = "";
             activeRelaySkinContext = {
                 playerName: data.playerName || "",
                 playerUuid: data.playerUuid || "",
@@ -1645,7 +1966,9 @@ function main() {
             });
             updateRelayActionButtons();
             setRelayStatus(
-                data.playerName
+                options.remoteSync
+                    ? `live synced: ${data.playerName || "player"}`
+                    : data.playerName
                     ? `rendered skin: ${data.playerName}`
                     : "rendered PMMP skin"
             );
@@ -1659,7 +1982,68 @@ function main() {
         } catch (error) {
             setRelayStatus(`failed to render PMMP skin: ${error?.message || "unknown error"}`);
             console.error("[Bedrock3DLab Relay] Failed to render PMMP skin:", error);
+        } finally {
+            isApplyingRemoteSync = false;
         }
+    }
+
+    function handleRemoteLiveBones(data) {
+        if (!activeRelaySkinContext || !isSameRelayPlayer(activeRelaySkinContext, data)) {
+            return;
+        }
+        applyRemoteBoneTransforms(data.bones);
+        setRelayStatus(`live synced (${data.playerName || activeRelaySkinContext.playerName || "player"})`);
+    }
+
+    async function handleRemoteSkinApply(data) {
+        if (!activeRelaySkinContext || !isSameRelayPlayer(activeRelaySkinContext, data)) {
+            return;
+        }
+        const incomingSkinData = typeof data.skinData === "string" ? data.skinData.trim() : "";
+        const incomingGeometryName = String(data.geometryName || "").trim();
+        const needsFullReload = Boolean(
+            data.fullSync ||
+                incomingSkinData !== "" ||
+                (incomingGeometryName !== "" && incomingGeometryName !== activeGeometryIdentifier)
+        );
+        if (needsFullReload) {
+            const syntheticMessage = {
+                data: {
+                    playerName: data.playerName || activeRelaySkinContext.playerName || "",
+                    playerUuid: data.playerUuid || activeRelaySkinContext.playerUuid || "",
+                    skinId: data.skinId || activeRelaySkinContext.skinId || "bedrock3dlab_custom",
+                    skinData: incomingSkinData !== "" ? data.skinData : activeRelaySkinContext.skinData,
+                    capeData: data.capeData !== undefined ? data.capeData : activeRelaySkinContext.capeData || "",
+                    geometryName: incomingGeometryName || activeRelaySkinContext.geometryName || "",
+                    geometryData:
+                        typeof data.geometryData === "string"
+                            ? data.geometryData
+                            : activeRelaySkinContext.geometryData || "",
+                    bones: Array.isArray(data.bones) ? data.bones : [],
+                },
+            };
+            await handlePlayerSkinResponseFromRelay(syntheticMessage, {
+                preserveCamera: true,
+                preservePanels: true,
+                preserveSelection: true,
+                remoteSync: true,
+            });
+            return;
+        }
+        if (Array.isArray(data.bones)) {
+            applyRemoteBoneTransforms(data.bones);
+        }
+        if (data.skinId) {
+            activeRelaySkinContext.skinId = data.skinId;
+            if (relayPayloadSkinId) {
+                relayPayloadSkinId.textContent = data.skinId;
+                relayPayloadSkinId.title = data.skinId;
+            }
+        }
+        if (typeof data.geometryData === "string") {
+            activeRelaySkinContext.geometryData = data.geometryData;
+        }
+        setRelayStatus(`live synced (${data.playerName || activeRelaySkinContext.playerName || "player"})`);
     }
 
     async function handleBedrock3DRelayMessage(event) {
@@ -1673,6 +2057,8 @@ function main() {
         console.log("[Bedrock3DLab Relay] Received:", envelope);
         if (envelope.type === "relay.ready") {
             relayPluginOnline = Boolean(envelope.data?.pluginOnline);
+            relayClientId = envelope.data?.clientId || null;
+            setRelayPeersCount(envelope.data?.webClients || 1);
             stripRelayPairCodeFromUrl();
             updateRelayActionButtons();
             if (relayPluginOnline) {
@@ -1682,6 +2068,10 @@ function main() {
             } else {
                 setRelayStatus("ready (waiting for server plugin)");
             }
+            return;
+        }
+        if (envelope.type === "web.peers") {
+            setRelayPeersCount(envelope.data?.webClients || 1);
             return;
         }
         if (envelope.type === "plugin.connected") {
@@ -1701,6 +2091,23 @@ function main() {
             const errMsg = envelope.data?.message || envelope.data?.code || "relay error";
             setRelayStatus(errMsg);
             console.warn("[Bedrock3DLab Relay] Error:", envelope.data);
+            return;
+        }
+        if (envelope.type === "from.web") {
+            if (envelope.sourceClientId && relayClientId && envelope.sourceClientId === relayClientId) {
+                return;
+            }
+            const peerMessage = envelope.message;
+            if (!peerMessage || typeof peerMessage !== "object") {
+                return;
+            }
+            if (peerMessage.type === "editor.live.bones") {
+                handleRemoteLiveBones(peerMessage.data || {});
+                return;
+            }
+            if (peerMessage.type === "player.skin.apply") {
+                await handleRemoteSkinApply(peerMessage.data || {});
+            }
             return;
         }
         if (envelope.type !== "from.plugin") {
@@ -1725,26 +2132,43 @@ function main() {
             return;
         }
         if (message.type === "player.skin.response") {
+            const targetClientId = message.data?.targetClientId;
+            if (targetClientId && relayClientId && targetClientId !== relayClientId) {
+                return;
+            }
+            if (message.data?.syncMode === "revert") {
+                if (!activeRelaySkinContext || !isSameRelayPlayer(activeRelaySkinContext, message.data || {})) {
+                    return;
+                }
+                console.log("[Bedrock3DLab Relay] Revert skin sync received:", message.data);
+                await handlePlayerSkinResponseFromRelay(message, {
+                    preserveCamera: true,
+                    preservePanels: true,
+                    preserveSelection: true,
+                    remoteSync: true,
+                });
+                return;
+            }
             console.log("[Bedrock3DLab Relay] Skin response received:", message.data);
             await handlePlayerSkinResponseFromRelay(message);
             return;
         }
         if (message.type === "player.skin.apply.result") {
+            const targetName = message.data?.playerName || "player";
             if (message.data?.success) {
-                setRelayStatus(`applied skin to ${message.data.playerName || "player"}`);
+                setRelayStatus(message.data?.live ? `live synced: ${targetName}` : `applied skin to ${targetName}`);
             } else {
-                setRelayStatus(`apply failed: ${message.data?.error || "unknown error"}`);
+                setRelayStatus(
+                    message.data?.live
+                        ? `live sync failed: ${message.data?.error || "unknown error"}`
+                        : `apply failed: ${message.data?.error || "unknown error"}`
+                );
             }
             return;
         }
         if (message.type === "player.skin.revert.result") {
             if (message.data?.success) {
                 setRelayStatus(`reverted skin for ${message.data.playerName || "player"}`);
-                requestPlayerSkin({
-                    name: message.data.playerName || activeRelaySkinContext?.playerName || "",
-                    uuid: message.data.playerUuid || activeRelaySkinContext?.playerUuid || "",
-                    online: true,
-                });
             } else {
                 setRelayStatus(`revert failed: ${message.data?.error || "unknown error"}`);
             }
@@ -1812,7 +2236,7 @@ function main() {
 }
 
 function undo() {
-    if (undoStack.length === 0) return;
+    if (undoStack.length === 0) return null;
     const action = undoStack.pop();
     const object = boneMap.get(action.boneName);
     if (object) {
@@ -1828,11 +2252,13 @@ function undo() {
         object.position.copy(action.oldState.position);
         object.quaternion.copy(action.oldState.quaternion);
         object.scale.copy(action.oldState.scale);
+        return object.name;
     }
+    return null;
 }
 
 function redo() {
-    if (redoStack.length === 0) return;
+    if (redoStack.length === 0) return null;
     const action = redoStack.pop();
     const object = boneMap.get(action.boneName);
     if (object) {
@@ -1848,7 +2274,9 @@ function redo() {
         object.position.copy(action.oldState.position);
         object.quaternion.copy(action.oldState.quaternion);
         object.scale.copy(action.oldState.scale);
+        return object.name;
     }
+    return null;
 }
 
 function experimentalRecenterPivot(object) {
@@ -1909,18 +2337,22 @@ function disposeObject3D(object, disposedGeometries = new Set(), disposedMateria
     });
 }
 
-function clearModelContainer(parentGroup) {
+function clearModelContainer(parentGroup, options = {}) {
     disposeObject3D(parentGroup);
     // hapus semua object/bone/mesh lama dari container
     parentGroup.clear();
     // bersihin state editor yg terhubung ke model lama
     boneMap.clear();
     boneList.innerHTML = "";
-    undoStack.length = 0;
-    redoStack.length = 0;
-    actionInProgress = null;
-    boneMenuContainer.classList.add("hidden");
-    boneMenuToggle.classList.add("hidden");
+    if (!options.preserveUndo) {
+        undoStack.length = 0;
+        redoStack.length = 0;
+        actionInProgress = null;
+    }
+    if (!options.preservePanels) {
+        boneMenuContainer.classList.add("hidden");
+        boneMenuToggle.classList.add("hidden");
+    }
 }
 
 function setCameraToFrontRightTop(camera, controls, center, cameraDist) {
@@ -1933,9 +2365,9 @@ function setCameraToFrontRightTop(camera, controls, center, cameraDist) {
     controls.update();
 }
 
-async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, controls) {
+async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, controls, options = {}) {
     try {
-        clearModelContainer(parentGroup);
+        clearModelContainer(parentGroup, options);
         const textureLoader = new THREE.TextureLoader();
         const texture = await textureLoader.loadAsync(textureDataURL);
         texture.colorSpace = THREE.SRGBColorSpace;
@@ -2087,15 +2519,17 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
             }
         }
         await new Promise((resolve) => setTimeout(resolve, 0));
-        const box = new THREE.Box3().setFromObject(parentGroup);
-        if (box.isEmpty()) return;
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const fov = camera.fov * (Math.PI / 180);
-        const diagonal = size.length();
-        let cameraDist = diagonal / 2 / Math.tan(fov / 2);
-        cameraDist *= 1.2;
-        setCameraToFrontRightTop(camera, controls, center, cameraDist);
+        if (!options.preserveCamera) {
+            const box = new THREE.Box3().setFromObject(parentGroup);
+            if (box.isEmpty()) return createdBoneGroups;
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            const fov = camera.fov * (Math.PI / 180);
+            const diagonal = size.length();
+            let cameraDist = diagonal / 2 / Math.tan(fov / 2);
+            cameraDist *= 1.2;
+            setCameraToFrontRightTop(camera, controls, center, cameraDist);
+        }
         return createdBoneGroups;
     } catch (error) {
         console.error("Gagal memuat model:", error);
