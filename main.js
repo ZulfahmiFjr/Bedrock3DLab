@@ -458,20 +458,63 @@ function main() {
         };
     }
 
+    function normalizeBedrockGeometryJson(parsed) {
+        if (!parsed || typeof parsed !== "object") {
+            return null;
+        }
+        if (Array.isArray(parsed["minecraft:geometry"]) && parsed["minecraft:geometry"].length > 0) {
+            return parsed;
+        }
+        const converted = [];
+        for (const [key, val] of Object.entries(parsed)) {
+            if (key === "format_version" || key === "debug" || !val || typeof val !== "object") {
+                continue;
+            }
+            if (!Array.isArray(val.bones) || val.bones.length === 0) {
+                continue;
+            }
+            converted.push({
+                description: {
+                    identifier: String(key).split(":")[0],
+                    texture_width: Number(val.texturewidth ?? val.texture_width ?? 64) || 64,
+                    texture_height: Number(val.textureheight ?? val.texture_height ?? 64) || 64,
+                    visible_bounds_width: Number(val.visible_bounds_width ?? 2) || 2,
+                    visible_bounds_height: Number(val.visible_bounds_height ?? 2) || 2,
+                    visible_bounds_offset: Array.isArray(val.visible_bounds_offset)
+                        ? val.visible_bounds_offset
+                        : [0, 1, 0],
+                },
+                bones: val.bones,
+            });
+        }
+        if (converted.length > 0) {
+            return {
+                format_version: "1.12.0",
+                "minecraft:geometry": converted,
+            };
+        }
+        return null;
+    }
+
     async function loadGeometryJsonForSkinResponse(data) {
         const geometryData = data.geometryData;
         if (typeof geometryData === "string" && geometryData.trim() !== "") {
             try {
-                return JSON.parse(geometryData);
+                const parsed = JSON.parse(geometryData);
+                const normalized = normalizeBedrockGeometryJson(parsed);
+                if (normalized) {
+                    return { geometryJson: normalized, usedFallback: false };
+                }
             } catch (error) {
-                throw new Error("geometryData ada, tapi bukan JSON valid.");
+                console.warn("[Bedrock3DLab Relay] Invalid geometryData JSON, fallback ke model default:", error);
             }
         }
+        // fallback ke model default kalo geometryData kosong atau isinya cuma "{}"
         const response = await fetch(DEFAULT_PLAYER_GEOMETRY_URL);
         if (!response.ok) {
             throw new Error(`Gagal load default player geometry: ${response.status}`);
         }
-        return await response.json();
+        return { geometryJson: await response.json(), usedFallback: true };
     }
 
     function getPreferredGeometryNameForSkinResponse(data) {
@@ -1290,8 +1333,17 @@ function main() {
         try {
             setRelayStatus(`applying skin to ${activeRelaySkinContext.playerName || "player"}...`);
             const rawSkinBase64 = await textureDataUrlToRawSkinBase64(textureDataURL);
-            const baseSkinId = activeRelaySkinContext.skinId || "bedrock3dlab";
-            const editedSkinId = baseSkinId.endsWith("_b3d") ? baseSkinId : `${baseSkinId}_b3d`;
+            const cleanBaseSkinId = (activeRelaySkinContext.skinId || "bedrock3dlab")
+                .replace(/_b3d_[0-9a-z]+$/i, "")
+                .replace(/_b3d$/i, "");
+            const editedSkinId = `${cleanBaseSkinId}_b3d_${Date.now().toString(36)}`;
+            const activeGeo = built.exportedData?.["minecraft:geometry"]?.[activeGeometryIndex];
+            const payloadGeometryData = activeGeo
+                ? {
+                      format_version: built.exportedData.format_version || "1.12.0",
+                      "minecraft:geometry": [activeGeo],
+                  }
+                : built.exportedData;
             const ok = sendRelayMessage("player.skin.apply", {
                 playerName: activeRelaySkinContext.playerName || "",
                 playerUuid: activeRelaySkinContext.playerUuid || "",
@@ -1299,7 +1351,7 @@ function main() {
                 skinData: rawSkinBase64,
                 capeData: activeRelaySkinContext.capeData || "",
                 geometryName: built.activeGeometryIdentifier || activeRelaySkinContext.geometryName || "geometry.humanoid.custom",
-                geometryData: JSON.stringify(built.exportedData),
+                geometryData: JSON.stringify(payloadGeometryData),
             });
             if (!ok) {
                 setRelayStatus("failed to send skin apply");
@@ -1534,9 +1586,7 @@ function main() {
             setRelayStatus("decoding PMMP skin...");
             const decodedTexture = skinDataBase64ToPngDataUrl(data.skinData);
             const decodedTextureDataUrl = decodedTexture.dataUrl;
-            const hasCustomGeometryData =
-                typeof data.geometryData === "string" && data.geometryData.trim() !== "";
-            const geometryJson = await loadGeometryJsonForSkinResponse(data);
+            const { geometryJson, usedFallback } = await loadGeometryJsonForSkinResponse(data);
             const geometries = geometryJson["minecraft:geometry"];
             const selectedGeometryIndex = findGeometryIndexForSkinResponse(
                 geometries,
@@ -1547,9 +1597,9 @@ function main() {
                 selectedGeometry.description?.identifier ||
                 selectedGeometry.description?.geometry_name ||
                 "unknown geometry";
-            const geometryLabel = hasCustomGeometryData
-                ? selectedGeometryIdentifier
-                : `${selectedGeometryIdentifier} fallback`;
+            const geometryLabel = usedFallback
+                ? `${selectedGeometryIdentifier} fallback`
+                : selectedGeometryIdentifier;
             modelData = geometryJson;
             textureDataURL = decodedTextureDataUrl;
             loadedJsonFileName = data.geometryName
@@ -1607,7 +1657,7 @@ function main() {
                 selectedGeometryIndex,
             });
         } catch (error) {
-            setRelayStatus("failed to render PMMP skin");
+            setRelayStatus(`failed to render PMMP skin: ${error?.message || "unknown error"}`);
             console.error("[Bedrock3DLab Relay] Failed to render PMMP skin:", error);
         }
     }
@@ -1892,8 +1942,8 @@ async function loadModelAndTexture(parentGroup, geo, textureDataURL, camera, con
         texture.magFilter = THREE.NearestFilter;
         texture.minFilter = THREE.NearestFilter;
         texture.flipY = false;
-        const textureWidth = geo.description.texture_width;
-        const textureHeight = geo.description.texture_height;
+        const textureWidth = geo.description?.texture_width || geo.texturewidth || 64;
+        const textureHeight = geo.description?.texture_height || geo.textureheight || 64;
         const allBones = new Map();
 
         // const bonesToRender = geo.bones.filter(
