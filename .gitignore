@@ -1,0 +1,8 @@
+relay/node_modules/
+relay/.wrangler/
+relay/.dev.vars
+relay/.env*
+!relay/.env.example
+.DS_Store
+Thumbs.db
+*.log
