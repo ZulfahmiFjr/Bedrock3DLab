@@ -86,7 +86,7 @@
                     <input
                         id="relayUrlInput"
                         type="text"
-                        value="ws://127.0.0.1:8787/ws"
+                        placeholder="wss://bedrock3dlab-relay.zulfahmifjr.workers.dev/ws"
                         autocomplete="off"
                     />
                 </label>
@@ -96,7 +96,7 @@
                         <input
                             id="relayServerIdInput"
                             type="text"
-                            value="demo"
+                            placeholder="srv_..."
                             autocomplete="off"
                         />
                     </label>
@@ -105,7 +105,7 @@
                         <input
                             id="relayPairCodeInput"
                             type="text"
-                            value="123456"
+                            placeholder="XXXX-XXXX"
                             autocomplete="off"
                         />
                     </label>
@@ -132,11 +132,18 @@
                         <span>Geometry</span>
                         <strong id="relayPayloadGeometry" class="relay-scroll-value" title="-">-</strong>
                     </div>
+                    <div class="relay-skin-actions">
+                        <button id="relayApplyBtn" class="action-button" type="button" disabled>Apply to Server</button>
+                        <button id="relayRevertBtn" class="action-button" type="button" disabled>Revert Skin</button>
+                    </div>
                 </div>
                 <div id="relayPlayersInfo" class="relay-players-info is-hidden">
                     <div class="relay-section-header">
                         <span>Relay Players</span>
-                        <strong id="relayPlayersCount">0</strong>
+                        <div class="relay-section-actions">
+                            <button id="relayRefreshPlayersBtn" class="relay-mini-button" type="button" disabled>Refresh</button>
+                            <strong id="relayPlayersCount">0</strong>
+                        </div>
                     </div>
                     <div id="relayPlayersList" class="relay-players-list"></div>
                 </div>

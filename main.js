@@ -7,6 +7,7 @@ const boneMenuContainer = document.getElementById("bone-menu-container");
 const boneList = document.getElementById("bone-list");
 const boneMenuToggle = document.getElementById("bone-menu-toggle");
 const closeBonePanelBtn = document.getElementById("close-bone-panel");
+const relayPanel = document.getElementById("relayPanel");
 const relayUrlInput = document.getElementById("relayUrlInput");
 const relayServerIdInput = document.getElementById("relayServerIdInput");
 const relayPairCodeInput = document.getElementById("relayPairCodeInput");
@@ -18,12 +19,21 @@ const relayPayloadPlayer = document.getElementById("relayPayloadPlayer");
 const relayPayloadSkinId = document.getElementById("relayPayloadSkinId");
 const relayPayloadTextureSize = document.getElementById("relayPayloadTextureSize");
 const relayPayloadGeometry = document.getElementById("relayPayloadGeometry");
+const relayApplyBtn = document.getElementById("relayApplyBtn");
+const relayRevertBtn = document.getElementById("relayRevertBtn");
 const relayPlayersInfo = document.getElementById("relayPlayersInfo");
 const relayPlayersCount = document.getElementById("relayPlayersCount");
+const relayRefreshPlayersBtn = document.getElementById("relayRefreshPlayersBtn");
 const relayPlayersList = document.getElementById("relayPlayersList");
 
+const DEFAULT_PUBLIC_RELAY_URL = "wss://bedrock3dlab-relay.zulfahmifjr.workers.dev/ws";
+const DEFAULT_LOCAL_RELAY_URL = "ws://127.0.0.1:8787/ws";
+
 let bedrock3dRelaySocket = null;
+let relayPluginOnline = false;
 let relayPlayersSnapshot = [];
+let selectedRelayPlayerKey = "";
+let activeRelaySkinContext = null;
 let boneMap = new Map();
 const undoStack = [];
 const redoStack = [];
@@ -395,6 +405,14 @@ function main() {
                 canvasHeight: 64,
             };
         }
+        if (byteLength === 32768) {
+            return {
+                sourceWidth: 128,
+                sourceHeight: 64,
+                canvasWidth: 128,
+                canvasHeight: 128,
+            };
+        }
         if (byteLength === 65536) {
             return {
                 sourceWidth: 128,
@@ -514,6 +532,7 @@ function main() {
                 alert("Error: File JSON tidak valid.");
                 modelData = null;
             }
+            updateRelayActionButtons();
         };
         reader.readAsText(file);
     });
@@ -523,7 +542,10 @@ function main() {
         if (!file) return;
         textureFileLabel.textContent = file.name;
         const reader = new FileReader();
-        reader.onload = (e) => (textureDataURL = e.target.result);
+        reader.onload = (e) => {
+            textureDataURL = e.target.result;
+            updateRelayActionButtons();
+        };
         reader.readAsDataURL(file);
     });
 
@@ -725,25 +747,21 @@ function main() {
         URL.revokeObjectURL(url);
     }
 
-    function exportEditedJson() {
+    function buildEditedGeometryData() {
         if (!modelData) {
-            alert("Belum ada file JSON yang diload.");
-            return;
+            return { error: "Belum ada file JSON yang diload." };
         }
         if (activeGeometryIndex === null) {
-            alert("Belum ada geometry aktif. Load atau pilih model dulu.");
-            return;
+            return { error: "Belum ada geometry aktif. Load atau pilih model dulu." };
         }
         const geometries = modelData["minecraft:geometry"];
         if (!geometries || !geometries[activeGeometryIndex]) {
-            alert("Geometry aktif tidak ditemukan.");
-            return;
+            return { error: "Geometry aktif tidak ditemukan." };
         }
         const exportedData = deepClone(modelData);
         const exportedGeo = exportedData["minecraft:geometry"][activeGeometryIndex];
         if (!exportedGeo.bones || exportedGeo.bones.length === 0) {
-            alert("Geometry aktif tidak punya bones.");
-            return;
+            return { error: "Geometry aktif tidak punya bones." };
         }
         const bonesByName = new Map();
         const originalPivotByName = new Map();
@@ -790,7 +808,7 @@ function main() {
                     if (Array.isArray(cube.origin)) {
                         shiftVector3Array(cube.origin, delta);
                     }
-                    // untuk cube yg punya percube rotation.
+                    // untuk cube yg punya percube rotation
                     if (Array.isArray(cube.pivot)) {
                         shiftVector3Array(cube.pivot, delta);
                     }
@@ -815,7 +833,7 @@ function main() {
                 const parentPivot = getExportedPivot(parentBone);
                 // kebalikan dari rumus import parent-child:
                 // object.position = parentPivot - childPivot untuk X,
-                // object.position = childPivot - parentPivot untuk Y/Z.
+                // object.position = childPivot - parentPivot untuk Y/Z
                 pivot = [
                     parentPivot[0] - object.position.x,
                     object.position.y + parentPivot[1],
@@ -823,7 +841,7 @@ function main() {
                 ];
             } else {
                 // kebalikan dari rumus root bone saat import:
-                // Three.js X adalah hasil flip dari Bedrock X.
+                // Three.js X adalah hasil flip dari Bedrock X
                 pivot = [
                     -object.position.x,
                     object.position.y,
@@ -845,10 +863,10 @@ function main() {
                 cleanNumber(exportedPivot[1] - originalPivot[1]),
                 cleanNumber(exportedPivot[2] - originalPivot[2]),
             ];
-            // pivot diganti.
+            // pivot diganti
             bone.pivot = exportedPivot;
-            // origin cube, cube pivot, dan locator juga harus ikut geser.
-            // kalo gak, hasil reload akan beda dari tampilan editor.
+            // origin cube, cube pivot, dan locator juga harus ikut geser
+            // kalo ga, hasil reload bakal beda dari tampilan editor
             shiftBoneGeometryData(bone, pivotDelta);
             // kebalikan dari rumus import rotation:
             // Three.js = [-bedrockX, -bedrockY, bedrockZ]
@@ -871,11 +889,24 @@ function main() {
                 hasUnsupportedScale = true;
             }
         });
+        return {
+            exportedData,
+            activeGeometryIdentifier,
+            hasUnsupportedScale,
+        };
+    }
+
+    function exportEditedJson() {
+        const built = buildEditedGeometryData();
+        if (built.error) {
+            alert(built.error);
+            return;
+        }
         const baseName = makeSafeFileName(loadedJsonFileName);
-        const geoName = makeSafeFileName(activeGeometryIdentifier);
+        const geoName = makeSafeFileName(built.activeGeometryIdentifier);
         const fileName = `${baseName}_${geoName}_edited.json`;
-        downloadJsonFile(exportedData, fileName);
-        if (hasUnsupportedScale) {
+        downloadJsonFile(built.exportedData, fileName);
+        if (built.hasUnsupportedScale) {
             alert(
                 "Export selesai, tapi ada bone yang memakai scale. Scale belum diexport ke format Bedrock geometry. Untuk scale, nanti perlu fitur bake scale into cubes."
             );
@@ -997,10 +1028,14 @@ function main() {
     screenshotBtn.addEventListener("click", takeScreenshot);
     relayConnectBtn?.addEventListener("click", connectBedrock3DRelay);
     relayDisconnectBtn?.addEventListener("click", disconnectBedrock3DRelay);
+    relayRefreshPlayersBtn?.addEventListener("click", requestRelayPlayers);
+    relayApplyBtn?.addEventListener("click", applyEditedSkinToRelay);
+    relayRevertBtn?.addEventListener("click", revertRelayPlayerSkin);
     const requestedSampleModel = getRequestedSampleModel();
     if (requestedSampleModel) {
         autoLoadSampleModel(requestedSampleModel);
     }
+    applyRelayParamsFromUrl();
 
     function animate() {
         requestAnimationFrame(animate);
@@ -1068,16 +1103,19 @@ function main() {
     }
 
     function clearRelayPayloadInfo() {
+        activeRelaySkinContext = null;
         if (!relayPayloadInfo) return;
         if (relayPayloadPlayer) relayPayloadPlayer.textContent = "-";
         if (relayPayloadSkinId) relayPayloadSkinId.textContent = "-";
         if (relayPayloadTextureSize) relayPayloadTextureSize.textContent = "-";
         if (relayPayloadGeometry) relayPayloadGeometry.textContent = "-";
         relayPayloadInfo.classList.add("is-hidden");
+        updateRelayActionButtons();
     }
 
     function clearRelayPlayersInfo() {
         relayPlayersSnapshot = [];
+        selectedRelayPlayerKey = "";
         if (relayPlayersInfo) {
             relayPlayersInfo.classList.add("is-hidden");
         }
@@ -1086,6 +1124,204 @@ function main() {
         }
         if (relayPlayersList) {
             relayPlayersList.textContent = "";
+        }
+        updateRelayActionButtons();
+    }
+
+    function getDefaultRelayUrl() {
+        const host = window.location.hostname;
+        if (host === "localhost" || host === "127.0.0.1") {
+            return DEFAULT_LOCAL_RELAY_URL;
+        }
+        return DEFAULT_PUBLIC_RELAY_URL;
+    }
+
+    function applyRelayParamsFromUrl() {
+        if (relayUrlInput && !relayUrlInput.value.trim()) {
+            relayUrlInput.value = getDefaultRelayUrl();
+        }
+        const params = new URLSearchParams(window.location.search);
+        const serverParam = (params.get("server") || params.get("serverId") || "").trim();
+        const codeParam = (params.get("code") || params.get("pairCode") || "").trim();
+        const relayParam = (params.get("relay") || params.get("relayUrl") || "").trim();
+        if (relayParam && relayUrlInput) {
+            relayUrlInput.value = relayParam;
+        }
+        if (serverParam && relayServerIdInput) {
+            relayServerIdInput.value = serverParam;
+        }
+        if (codeParam && relayPairCodeInput) {
+            relayPairCodeInput.value = codeParam;
+        }
+        if (serverParam && codeParam) {
+            if (relayPanel) {
+                relayPanel.open = true;
+            }
+            connectBedrock3DRelay();
+        }
+    }
+
+    function stripRelayPairCodeFromUrl() {
+        try {
+            const current = new URL(window.location.href);
+            if (!current.searchParams.has("code") && !current.searchParams.has("pairCode")) {
+                return;
+            }
+            current.searchParams.delete("code");
+            current.searchParams.delete("pairCode");
+            window.history.replaceState({}, "", current.toString());
+        } catch {}
+    }
+
+    function generateRelayRequestId() {
+        if (typeof crypto?.randomUUID === "function") {
+            return `req_${crypto.randomUUID()}`;
+        }
+        return `req_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+    }
+
+    function sendRelayMessage(type, data = {}) {
+        if (!bedrock3dRelaySocket || bedrock3dRelaySocket.readyState !== WebSocket.OPEN) {
+            setRelayStatus("not connected");
+            return false;
+        }
+        const payload = {
+            type,
+            requestId: generateRelayRequestId(),
+            data,
+        };
+        bedrock3dRelaySocket.send(JSON.stringify(payload));
+        return true;
+    }
+
+    function updateRelayActionButtons() {
+        const socketOpen = Boolean(bedrock3dRelaySocket && bedrock3dRelaySocket.readyState === WebSocket.OPEN);
+        const canControl = socketOpen && relayPluginOnline;
+        if (relayRefreshPlayersBtn) {
+            relayRefreshPlayersBtn.disabled = !canControl;
+        }
+        const hasTarget = Boolean(
+            activeRelaySkinContext && (activeRelaySkinContext.playerUuid || activeRelaySkinContext.playerName)
+        );
+        if (relayApplyBtn) {
+            relayApplyBtn.disabled = !(canControl && hasTarget && modelData && textureDataURL);
+        }
+        if (relayRevertBtn) {
+            relayRevertBtn.disabled = !(canControl && hasTarget);
+        }
+    }
+
+    function getRelayPlayerKey(player) {
+        if (!player) return "";
+        if (player.uuid) return `uuid:${player.uuid}`;
+        return `name:${String(player.name || "").toLowerCase()}`;
+    }
+
+    function requestRelayPlayers() {
+        if (!relayPluginOnline) {
+            setRelayStatus("plugin offline");
+            return;
+        }
+        if (sendRelayMessage("server.players.request", {})) {
+            setRelayStatus("loading players...");
+        }
+    }
+
+    function requestPlayerSkin(player) {
+        if (!player || !player.online) return;
+        selectedRelayPlayerKey = getRelayPlayerKey(player);
+        setRelayPlayersInfo(relayPlayersSnapshot);
+        const ok = sendRelayMessage("player.skin.request", {
+            playerName: player.name || "",
+            playerUuid: player.uuid || "",
+        });
+        if (ok) {
+            setRelayStatus(`loading skin: ${player.name || player.uuid}...`);
+        }
+    }
+
+    function uint8ArrayToBase64(bytes) {
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const slice = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode(...slice);
+        }
+        return btoa(binary);
+    }
+
+    async function textureDataUrlToRawSkinBase64(dataUrl) {
+        if (activeRelaySkinContext && dataUrl === activeRelaySkinContext.decodedDataUrl && activeRelaySkinContext.skinData) {
+            return activeRelaySkinContext.skinData;
+        }
+        const img = await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.crossOrigin = "anonymous";
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error("Gagal membaca texture PNG untuk skin."));
+            image.src = dataUrl;
+        });
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+            throw new Error("Canvas 2D context tidak tersedia.");
+        }
+        context.drawImage(img, 0, 0);
+        const rgba = context.getImageData(0, 0, img.width, img.height).data;
+        const validByteLengths = new Set([8192, 16384, 32768, 65536]);
+        if (!validByteLengths.has(rgba.byteLength)) {
+            throw new Error(`Ukuran tekstur (${img.width}x${img.height}) bukan ukuran skin Bedrock standar (64x32, 64x64, 128x64, atau 128x128).`);
+        }
+        return uint8ArrayToBase64(new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength));
+    }
+
+    async function applyEditedSkinToRelay() {
+        if (!activeRelaySkinContext) {
+            setRelayStatus("select a relay player first");
+            return;
+        }
+        const built = buildEditedGeometryData();
+        if (built.error) {
+            alert(built.error);
+            return;
+        }
+        try {
+            setRelayStatus(`applying skin to ${activeRelaySkinContext.playerName || "player"}...`);
+            const rawSkinBase64 = await textureDataUrlToRawSkinBase64(textureDataURL);
+            const baseSkinId = activeRelaySkinContext.skinId || "bedrock3dlab";
+            const editedSkinId = baseSkinId.endsWith("_b3d") ? baseSkinId : `${baseSkinId}_b3d`;
+            const ok = sendRelayMessage("player.skin.apply", {
+                playerName: activeRelaySkinContext.playerName || "",
+                playerUuid: activeRelaySkinContext.playerUuid || "",
+                skinId: editedSkinId,
+                skinData: rawSkinBase64,
+                capeData: activeRelaySkinContext.capeData || "",
+                geometryName: built.activeGeometryIdentifier || activeRelaySkinContext.geometryName || "geometry.humanoid.custom",
+                geometryData: JSON.stringify(built.exportedData),
+            });
+            if (!ok) {
+                setRelayStatus("failed to send skin apply");
+            }
+        } catch (error) {
+            setRelayStatus("apply failed");
+            alert(error.message || "Gagal menyiapkan skin untuk dikirim ke server.");
+            console.error("[Bedrock3DLab Relay] Apply error:", error);
+        }
+    }
+
+    function revertRelayPlayerSkin() {
+        if (!activeRelaySkinContext) {
+            setRelayStatus("select a relay player first");
+            return;
+        }
+        const ok = sendRelayMessage("player.skin.revert", {
+            playerName: activeRelaySkinContext.playerName || "",
+            playerUuid: activeRelaySkinContext.playerUuid || "",
+        });
+        if (ok) {
+            setRelayStatus(`reverting skin for ${activeRelaySkinContext.playerName || "player"}...`);
         }
     }
 
@@ -1142,8 +1378,18 @@ function main() {
             const playerName = String(player?.name || "Unknown");
             const playerUuid = typeof player?.uuid === "string" ? player.uuid : "";
             const isOnline = typeof player?.online === "boolean" ? player.online : true;
+            const playerKey = getRelayPlayerKey(player);
             const row = document.createElement("div");
-            row.className = "relay-player-row";
+            row.className = isOnline
+                ? "relay-player-row is-clickable"
+                : "relay-player-row is-offline";
+            if (selectedRelayPlayerKey && playerKey === selectedRelayPlayerKey) {
+                row.classList.add("is-active");
+            }
+            if (isOnline) {
+                row.title = `Click to load ${playerName}'s skin`;
+                row.addEventListener("click", () => requestPlayerSkin(player));
+            }
             const main = document.createElement("div");
             main.className = "relay-player-main";
             const nameElement = document.createElement("strong");
@@ -1215,9 +1461,15 @@ function main() {
     }
 
     function buildRelayWebSocketUrl() {
-        const relayUrl = relayUrlInput?.value?.trim() || "ws://127.0.0.1:8787/ws";
-        const serverId = relayServerIdInput?.value?.trim() || "demo";
-        const pairCode = relayPairCodeInput?.value?.trim() || "123456";
+        const relayUrl = relayUrlInput?.value?.trim() || getDefaultRelayUrl();
+        const serverId = relayServerIdInput?.value?.trim() || "";
+        const pairCode = relayPairCodeInput?.value?.trim() || "";
+        if (!serverId) {
+            throw new Error("Server ID is required.");
+        }
+        if (!pairCode) {
+            throw new Error("Pair Code is required.");
+        }
         const url = new URL(relayUrl);
         url.searchParams.set("role", "web");
         url.searchParams.set("serverId", serverId);
@@ -1230,26 +1482,38 @@ function main() {
             setRelayStatus("already connected");
             return;
         }
-        const wsUrl = buildRelayWebSocketUrl();
+        let wsUrl;
+        try {
+            wsUrl = buildRelayWebSocketUrl();
+        } catch (error) {
+            setRelayStatus(error.message || "invalid relay config");
+            return;
+        }
         clearRelayPayloadInfo();
         clearRelayPlayersInfo();
+        relayPluginOnline = false;
         bedrock3dRelaySocket = new WebSocket(wsUrl);
         setRelayStatus("connecting...");
         if (relayConnectBtn) relayConnectBtn.disabled = true;
         if (relayDisconnectBtn) relayDisconnectBtn.disabled = false;
+        updateRelayActionButtons();
         bedrock3dRelaySocket.addEventListener("open", () => {
             setRelayStatus("connected");
+            updateRelayActionButtons();
         });
         bedrock3dRelaySocket.addEventListener("message", handleBedrock3DRelayMessage);
         bedrock3dRelaySocket.addEventListener("error", () => {
             setRelayStatus("error, check console");
             console.error("[Bedrock3DLab Relay] WebSocket error");
         });
-        bedrock3dRelaySocket.addEventListener("close", () => {
-            setRelayStatus("disconnected");
+        bedrock3dRelaySocket.addEventListener("close", (event) => {
+            relayPluginOnline = false;
+            const reasonText = event?.reason ? ` (${event.reason})` : "";
+            setRelayStatus(`disconnected${reasonText}`);
             if (relayConnectBtn) relayConnectBtn.disabled = false;
             if (relayDisconnectBtn) relayDisconnectBtn.disabled = true;
             bedrock3dRelaySocket = null;
+            updateRelayActionButtons();
         });
     }
 
@@ -1308,12 +1572,28 @@ function main() {
                 geometrySelector.value = String(selectedGeometryIndex);
             }
             await loadAndRender(selectedGeometry, textureDataURL, selectedGeometryIndex);
+            activeRelaySkinContext = {
+                playerName: data.playerName || "",
+                playerUuid: data.playerUuid || "",
+                skinId: data.skinId || "",
+                skinData: data.skinData || "",
+                capeData: data.capeData || "",
+                geometryName: selectedGeometryIdentifier,
+                geometryData: data.geometryData || "",
+                decodedDataUrl: decodedTextureDataUrl,
+            };
+            selectedRelayPlayerKey = getRelayPlayerKey({
+                name: data.playerName || "",
+                uuid: data.playerUuid || "",
+            });
+            setRelayPlayersInfo(relayPlayersSnapshot);
             setRelayPayloadInfo({
                 playerName: data.playerName || data.playerUuid || "-",
                 skinId: data.skinId || "-",
                 textureSize: `${decodedTexture.width}x${decodedTexture.height}`,
                 geometryLabel,
             });
+            updateRelayActionButtons();
             setRelayStatus(
                 data.playerName
                     ? `rendered skin: ${data.playerName}`
@@ -1342,15 +1622,35 @@ function main() {
         }
         console.log("[Bedrock3DLab Relay] Received:", envelope);
         if (envelope.type === "relay.ready") {
-            setRelayStatus("ready");
+            relayPluginOnline = Boolean(envelope.data?.pluginOnline);
+            stripRelayPairCodeFromUrl();
+            updateRelayActionButtons();
+            if (relayPluginOnline) {
+                setRelayStatus("ready (plugin online)");
+                sendRelayMessage("server.status.request", {});
+                requestRelayPlayers();
+            } else {
+                setRelayStatus("ready (waiting for server plugin)");
+            }
             return;
         }
         if (envelope.type === "plugin.connected") {
+            relayPluginOnline = true;
             setRelayStatus("plugin online");
+            updateRelayActionButtons();
+            requestRelayPlayers();
             return;
         }
         if (envelope.type === "plugin.disconnected") {
+            relayPluginOnline = false;
             setRelayStatus("plugin offline");
+            updateRelayActionButtons();
+            return;
+        }
+        if (envelope.type === "relay.error") {
+            const errMsg = envelope.data?.message || envelope.data?.code || "relay error";
+            setRelayStatus(errMsg);
+            console.warn("[Bedrock3DLab Relay] Error:", envelope.data);
             return;
         }
         if (envelope.type !== "from.plugin") {
@@ -1361,9 +1661,43 @@ function main() {
             console.warn("[Bedrock3DLab Relay] Invalid plugin message:", envelope);
             return;
         }
+        if (message.type === "relay.error") {
+            const errMsg = message.data?.message || message.data?.code || "plugin error";
+            setRelayStatus(errMsg);
+            console.warn("[Bedrock3DLab Relay] Plugin error:", message.data);
+            return;
+        }
+        if (message.type === "server.status.response") {
+            const count = message.data?.onlinePlayers;
+            if (typeof count === "number") {
+                setRelayStatus(`server online (${count} players)`);
+            }
+            return;
+        }
         if (message.type === "player.skin.response") {
             console.log("[Bedrock3DLab Relay] Skin response received:", message.data);
             await handlePlayerSkinResponseFromRelay(message);
+            return;
+        }
+        if (message.type === "player.skin.apply.result") {
+            if (message.data?.success) {
+                setRelayStatus(`applied skin to ${message.data.playerName || "player"}`);
+            } else {
+                setRelayStatus(`apply failed: ${message.data?.error || "unknown error"}`);
+            }
+            return;
+        }
+        if (message.type === "player.skin.revert.result") {
+            if (message.data?.success) {
+                setRelayStatus(`reverted skin for ${message.data.playerName || "player"}`);
+                requestPlayerSkin({
+                    name: message.data.playerName || activeRelaySkinContext?.playerName || "",
+                    uuid: message.data.playerUuid || activeRelaySkinContext?.playerUuid || "",
+                    online: true,
+                });
+            } else {
+                setRelayStatus(`revert failed: ${message.data?.error || "unknown error"}`);
+            }
             return;
         }
         if (message.type === "server.players.response") {
@@ -1405,6 +1739,23 @@ function main() {
                     : "player quit"
             );
             return;
+        }
+        if (message.type === "server.event.skin_changed") {
+            const changedName = message.data?.playerName || "";
+            setRelayStatus(changedName ? `skin changed: ${changedName}` : "skin changed");
+            if (
+                activeRelaySkinContext &&
+                isSameRelayPlayer(
+                    { name: activeRelaySkinContext.playerName, uuid: activeRelaySkinContext.playerUuid },
+                    { name: changedName, uuid: message.data?.playerUuid || "" }
+                )
+            ) {
+                requestPlayerSkin({
+                    name: changedName,
+                    uuid: message.data?.playerUuid || "",
+                    online: true,
+                });
+            }
         }
     }
     animate();
