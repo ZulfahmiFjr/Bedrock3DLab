@@ -155,6 +155,111 @@
                     <div id="relayPlayersList" class="relay-players-list"></div>
                 </div>
             </details>
+            <details id="cosmeticsStudioPanel" class="control-group relay-panel studio-panel">
+                <summary class="group-label relay-summary">Cosmetics Studio</summary>
+                <label class="relay-field">
+                    <span>Studio API URL</span>
+                    <input
+                        id="studioUrlInput"
+                        type="text"
+                        placeholder="https://43.156.152.8:8443/cosmetics-studio"
+                        autocomplete="off"
+                    />
+                </label>
+                <label class="relay-field">
+                    <span>Studio Token</span>
+                    <input
+                        id="studioTokenInput"
+                        type="password"
+                        placeholder="studio token..."
+                        autocomplete="off"
+                    />
+                </label>
+                <div class="relay-actions">
+                    <button id="studioConnectBtn" class="action-button" type="button">Connect Studio</button>
+                    <button id="studioSyncBtn" class="action-button" type="button" disabled>Sync Server</button>
+                </div>
+                <p id="studioStatusText" class="relay-status">Studio: disconnected</p>
+                <div id="studioCatalogSection" class="studio-section is-hidden">
+                    <div class="relay-section-header">
+                        <span>Server Cosmetics</span>
+                        <div class="relay-section-actions">
+                            <button id="studioRefreshBtn" class="relay-mini-button" type="button">Refresh</button>
+                            <button id="studioNewBtn" class="relay-mini-button" type="button">+ New</button>
+                            <strong id="studioItemsCount">0</strong>
+                        </div>
+                    </div>
+                    <div id="studioCategoryTabs" class="studio-cat-tabs">
+                        <button type="button" class="studio-cat-tab is-active" data-cat="ALL">All</button>
+                        <button type="button" class="studio-cat-tab" data-cat="Wing">Sayap</button>
+                        <button type="button" class="studio-cat-tab" data-cat="Cap">Topi</button>
+                        <button type="button" class="studio-cat-tab" data-cat="Tail">Ekor</button>
+                        <button type="button" class="studio-cat-tab" data-cat="Tool">Aksesori</button>
+                    </div>
+                    <div id="studioItemsList" class="relay-players-list studio-items-list"></div>
+                </div>
+                <div id="studioEditorSection" class="studio-section">
+                    <div class="relay-section-header">
+                        <span>Cosmetic Editor</span>
+                        <span id="studioModeBadge" class="relay-peers-badge">Local / New</span>
+                    </div>
+                    <div class="studio-import-row">
+                        <label for="studioModelFile" class="file-trigger studio-file-trigger" id="studioModelFileLabel">Import .bbmodel / .json...</label>
+                        <input type="file" id="studioModelFile" accept=".bbmodel,.json" />
+                    </div>
+                    <div class="studio-import-row">
+                        <label for="studioTextureFile" class="file-trigger studio-file-trigger" id="studioTextureFileLabel">Optional part_map / texture .png...</label>
+                        <input type="file" id="studioTextureFile" accept=".png" />
+                    </div>
+                    <label class="relay-field">
+                        <span>Cosmetic Name</span>
+                        <input id="studioNameInput" type="text" placeholder="Crystal Wing" maxlength="48" autocomplete="off" />
+                    </label>
+                    <div class="relay-row">
+                        <label class="relay-field">
+                            <span>Category</span>
+                            <select id="studioCategorySelect" class="studio-select">
+                                <option value="Wing">Wing (Sayap)</option>
+                                <option value="Cap">Cap (Topi)</option>
+                                <option value="Tail">Tail (Ekor)</option>
+                                <option value="Tool">Tool (Aksesori)</option>
+                            </select>
+                        </label>
+                        <label class="relay-field">
+                            <span>Attach Bone</span>
+                            <select id="studioAttachSelect" class="studio-select">
+                                <option value="body">body</option>
+                                <option value="head">head</option>
+                                <option value="rightArm">rightArm</option>
+                                <option value="leftArm">leftArm</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="studio-colors-header">
+                        <span>Color Layers</span>
+                        <div class="relay-section-actions">
+                            <button id="studioAddColorBtn" class="relay-mini-button" type="button">+ Color</button>
+                            <button id="studioRemoveColorBtn" class="relay-mini-button" type="button">- Color</button>
+                        </div>
+                    </div>
+                    <div id="studioColorLayers" class="studio-color-layers"></div>
+                    <div class="studio-options-col">
+                        <label class="relay-live-toggle">
+                            <input id="studioOptimizeToggle" type="checkbox" checked />
+                            <span>Optimize 1x1x1 cubes (1.12.0 UV)</span>
+                        </label>
+                        <label class="relay-live-toggle">
+                            <input id="studioBuildAssetsToggle" type="checkbox" checked />
+                            <span>Auto-render sprites, UI &amp; sync pack</span>
+                        </label>
+                    </div>
+                    <div class="relay-skin-actions">
+                        <button id="studioPublishBtn" class="action-button" type="button" disabled>Publish &amp; Sync</button>
+                        <button id="studioDeleteBtn" class="action-button" type="button" disabled>Delete Item</button>
+                    </div>
+                    <p id="studioJobStatus" class="relay-status studio-job-status is-hidden"></p>
+                </div>
+            </details>
         </div>
         <div id="bone-menu-container" class="bone-panel hidden">
             <div class="controls-header">

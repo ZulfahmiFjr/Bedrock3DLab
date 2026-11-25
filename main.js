@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { initCosmeticsStudio } from "./cosmetics-studio.js";
 // import { DragControls } from "three/addons/controls/DragControls.js";
 
 const boneMenuContainer = document.getElementById("bone-menu-container");
@@ -1163,6 +1164,15 @@ function main() {
         autoLoadSampleModel(requestedSampleModel);
     }
     applyRelayParamsFromUrl();
+    initCosmeticsStudio({
+        loadAndRender,
+        buildEditedGeometryData,
+        setLoadedModelState(doc, fileName) {
+            modelData = doc;
+            loadedJsonFileName = fileName || "cosmetic.geo.json";
+            activeGeometryIndex = 0;
+        },
+    });
 
     function animate() {
         requestAnimationFrame(animate);

@@ -268,4 +268,64 @@ describe("Bedrock3DLab Relay Worker", () => {
         webB.ws.close(1000, "test done");
         plugin.ws.close(1000, "test done");
     });
+
+    it("forwards cosmetics catalog and publish messages between web and plugin", async () => {
+        const serverId = "srv_cos_test";
+        const secret = "cosmetics_secret_1234567890";
+        const plugin = await connectWs("/ws?role=plugin&serverId=" + serverId + "&secret=" + secret);
+        await plugin.nextMessage();
+
+        plugin.ws.send(JSON.stringify({ type: "relay.pair.create", requestId: "pair_cos", data: { ttlSeconds: 300 } }));
+        const pairRes = await plugin.nextMessage();
+        const pairCode = pairRes.data.pairCode;
+
+        const web = await connectWs("/ws?role=web&serverId=" + serverId + "&pairCode=" + pairCode);
+        const readyWeb = await web.nextMessage();
+        await web.nextMessage();
+        await plugin.nextMessage();
+
+        // uji request katalog cosmetics dari web ke plugin
+        web.ws.send(JSON.stringify({ type: "cosmetics.catalog.request", requestId: "cos_cat_1", data: {} }));
+        const catReq = await plugin.nextMessage();
+        expect(catReq.type).toBe("from.web");
+        expect(catReq.message.type).toBe("cosmetics.catalog.request");
+
+        plugin.ws.send(
+            JSON.stringify({
+                type: "cosmetics.catalog.response",
+                requestId: "cos_cat_1",
+                data: { categories: { Wing: { label: "SAYAP" } }, items: [{ id: "butterfly_wing", name: "Butterfly Wing" }] },
+            })
+        );
+        const catRes = await web.nextMessage();
+        expect(catRes.type).toBe("from.plugin");
+        expect(catRes.message.type).toBe("cosmetics.catalog.response");
+        expect(catRes.message.data.items[0].id).toBe("butterfly_wing");
+
+        // uji publish item cosmetics dari web ke plugin trus balikin hasilnya
+        web.ws.send(
+            JSON.stringify({
+                type: "cosmetics.item.publish",
+                requestId: "cos_pub_1",
+                data: { name: "Test Wing", category: "Wing", geometry: { format_version: "1.12.0" } },
+            })
+        );
+        const pubReq = await plugin.nextMessage();
+        expect(pubReq.sourceClientId).toBe(readyWeb.data.clientId);
+        expect(pubReq.message.type).toBe("cosmetics.item.publish");
+
+        plugin.ws.send(
+            JSON.stringify({
+                type: "cosmetics.item.publish.result",
+                requestId: "cos_pub_1",
+                data: { success: true, id: "test_wing" },
+            })
+        );
+        const pubRes = await web.nextMessage();
+        expect(pubRes.message.type).toBe("cosmetics.item.publish.result");
+        expect(pubRes.message.data.success).toBe(true);
+
+        web.ws.close(1000, "test done");
+        plugin.ws.close(1000, "test done");
+    });
 });

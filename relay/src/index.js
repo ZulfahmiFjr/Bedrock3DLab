@@ -20,6 +20,11 @@ const WEB_TO_PLUGIN_TYPES = new Set([
     "player.skin.request",
     "player.skin.apply",
     "player.skin.revert",
+    "cosmetics.catalog.request",
+    "cosmetics.item.request",
+    "cosmetics.item.publish",
+    "cosmetics.item.delete",
+    "cosmetics.sync.request",
 ]);
 
 const WEB_TO_WEB_TYPES = new Set([
@@ -36,6 +41,12 @@ const PLUGIN_TO_WEB_TYPES = new Set([
     "server.event.player_join",
     "server.event.player_quit",
     "server.event.skin_changed",
+    "cosmetics.catalog.response",
+    "cosmetics.item.response",
+    "cosmetics.item.publish.result",
+    "cosmetics.item.delete.result",
+    "cosmetics.sync.result",
+    "server.event.cosmetics_synced",
     "relay.error",
 ]);
 
@@ -315,6 +326,83 @@ function validateMessageData(message) {
         case "relay.ping":
         case "server.status.request":
         case "server.players.request":
+        case "cosmetics.catalog.request":
+        case "cosmetics.sync.request":
+            return { ok: true };
+        case "cosmetics.item.request":
+        case "cosmetics.item.delete":
+            if (!isNonEmptyString(data.id) && !isNonEmptyString(data.slug)) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "MISSING_COSMETIC_ID",
+                        message.type + " requires id or slug.",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
+        case "cosmetics.item.publish":
+            if (!isNonEmptyString(data.name)) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "MISSING_COSMETIC_NAME",
+                        "cosmetics.item.publish requires name.",
+                        message.requestId
+                    ),
+                };
+            }
+            if (data.geometry === undefined || (typeof data.geometry !== "object" && typeof data.geometry !== "string")) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "MISSING_COSMETIC_GEOMETRY",
+                        "cosmetics.item.publish requires geometry object or JSON string.",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
+        case "cosmetics.catalog.response":
+            if (!Array.isArray(data.items)) {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "INVALID_COSMETICS_CATALOG",
+                        "cosmetics.catalog.response requires data.items as an array.",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
+        case "cosmetics.item.response":
+            if (!data.meta || typeof data.meta !== "object") {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "INVALID_COSMETIC_META",
+                        "cosmetics.item.response requires meta object.",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
+        case "cosmetics.item.publish.result":
+        case "cosmetics.item.delete.result":
+        case "cosmetics.sync.result":
+            if (typeof data.success !== "boolean") {
+                return {
+                    ok: false,
+                    error: createRelayError(
+                        "MISSING_SUCCESS_STATE",
+                        message.type + " requires success as boolean.",
+                        message.requestId
+                    ),
+                };
+            }
+            return { ok: true };
+        case "server.event.cosmetics_synced":
             return { ok: true };
         case "player.skin.request":
         case "player.skin.revert":
@@ -690,7 +778,10 @@ export class ServerRoom extends DurableObject {
                 serverId: meta.serverId,
                 message,
             };
-            if (message.type === "player.skin.response" && isNonEmptyString(message.data?.targetClientId)) {
+            if (
+                (message.type === "player.skin.response" || message.type === "cosmetics.item.response") &&
+                isNonEmptyString(message.data?.targetClientId)
+            ) {
                 this.sendToWebClient(message.data.targetClientId, pluginEnvelope);
                 return;
             }
