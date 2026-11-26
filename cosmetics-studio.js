@@ -252,7 +252,7 @@ export function initCosmeticsStudio(bridge) {
         isExisting: false,
         name: "",
         category: "Wing",
-        attachmentBone: "body",
+        attachmentBone: "jacket",
         colorLayers: [
             [0, 170, 255],
             [255, 255, 255],
@@ -262,6 +262,7 @@ export function initCosmeticsStudio(bridge) {
         textureDataUrl: null,
         rawGeo: null,
         cosmeticBoneNames: new Set(),
+        reverseRenameMap: new Map(),
         uvShift: [0, 0],
         texW: 64,
         texH: 64,
@@ -424,27 +425,45 @@ export function initCosmeticsStudio(bridge) {
         baseGeo.description.texture_width = useTextured128 ? 128 : 64;
         baseGeo.description.texture_height = useTextured128 ? 128 : 64;
 
-        const attach = activeCosmetic.attachmentBone || "body";
+        const attach = activeCosmetic.attachmentBone || "jacket";
         const baseNames = new Set((baseGeo.bones || []).map((b) => b.name));
+        const playerAttach = baseNames.has(attach) ? attach : "body";
         const cosNames = new Set();
-
+        const renameMap = new Map();
+        const reverseRenameMap = new Map();
+        const keptRaw = [];
         for (const rawBone of cosBones) {
             if (!rawBone || !rawBone.name) continue;
             // lewati bone jangkar kosong yg namanya sama dgan bone player (misal body atau head)
             if (rawBone.name.toLowerCase() === attach.toLowerCase() && (!rawBone.cubes || rawBone.cubes.length === 0)) {
                 continue;
             }
-            let bone = shiftBoneUv(rawBone, uvShift[0], uvShift[1]);
-            if (baseNames.has(bone.name)) {
-                bone.name = "cos_" + bone.name;
+            keptRaw.push(rawBone);
+            if (baseNames.has(rawBone.name)) {
+                const mapped = "cos_" + rawBone.name;
+                renameMap.set(rawBone.name, mapped);
+                reverseRenameMap.set(mapped, rawBone.name);
             }
-            if (!bone.parent || bone.parent.toLowerCase() === attach.toLowerCase()) {
-                bone.parent = attach;
+        }
+        const keptNames = new Set(keptRaw.map((b) => renameMap.get(b.name) || b.name));
+        for (const rawBone of keptRaw) {
+            const bone = shiftBoneUv(rawBone, uvShift[0], uvShift[1]);
+            const mappedName = renameMap.get(bone.name) || bone.name;
+            bone.name = mappedName;
+            const origParent = bone.parent || "";
+            const mappedParent = renameMap.get(origParent) || origParent;
+            if (!origParent || origParent.toLowerCase() === attach.toLowerCase()) {
+                bone.parent = keptNames.has(mappedParent) && mappedParent !== mappedName ? mappedParent : playerAttach;
+            } else if (keptNames.has(mappedParent)) {
+                bone.parent = mappedParent;
+            } else {
+                bone.parent = playerAttach;
             }
             cosNames.add(bone.name);
             baseGeo.bones.push(bone);
         }
         activeCosmetic.cosmeticBoneNames = cosNames;
+        activeCosmetic.reverseRenameMap = reverseRenameMap;
 
         bridge.setLoadedModelState(baseDoc, (activeCosmetic.slug || "cosmetic") + ".geo.json");
         await bridge.loadAndRender(baseGeo, texUrl, 0, {
@@ -514,6 +533,19 @@ export function initCosmeticsStudio(bridge) {
         }
     }
 
+    function setAttachSelectValue(boneName) {
+        if (!attachSelect) return;
+        const val = String(boneName || "jacket").trim() || "jacket";
+        const exists = Array.from(attachSelect.options).some((opt) => opt.value === val);
+        if (!exists) {
+            const opt = document.createElement("option");
+            opt.value = val;
+            opt.textContent = val + " (custom)";
+            attachSelect.appendChild(opt);
+        }
+        attachSelect.value = val;
+    }
+
     async function loadCatalogItem(slug) {
         setStatus("loading " + slug + "...");
         try {
@@ -537,13 +569,14 @@ export function initCosmeticsStudio(bridge) {
                 textureDataUrl: data.texture_png || null,
                 rawGeo: data.geometry,
                 cosmeticBoneNames: new Set(),
+                reverseRenameMap: new Map(),
                 uvShift: [0, 0],
                 texW: 64,
                 texH: 64,
             };
             if (nameInput) nameInput.value = activeCosmetic.name;
             if (categorySelect) categorySelect.value = activeCosmetic.category;
-            if (attachSelect) attachSelect.value = activeCosmetic.attachmentBone;
+            setAttachSelectValue(activeCosmetic.attachmentBone);
             if (modelFileLabel) modelFileLabel.textContent = activeCosmetic.slug + ".geo.json (server)";
             if (textureFileLabel) {
                 textureFileLabel.textContent = activeCosmetic.partMapDataUrl
@@ -577,6 +610,7 @@ export function initCosmeticsStudio(bridge) {
             textureDataUrl: null,
             rawGeo: null,
             cosmeticBoneNames: new Set(),
+            reverseRenameMap: new Map(),
             uvShift: [0, 0],
             texW: 64,
             texH: 64,
@@ -594,15 +628,21 @@ export function initCosmeticsStudio(bridge) {
 
     function collectEditedCosmeticGeometry() {
         // ambil transform bone terbaru dari ThreeJS trus saring khusus bone kosmetik saja tanpa bone player dasar
-        const attach = activeCosmetic.attachmentBone || "body";
+        const attach = activeCosmetic.attachmentBone || "jacket";
         const [sx, sy] = activeCosmetic.uvShift || [0, 0];
+        const rev = activeCosmetic.reverseRenameMap || new Map();
         const built = bridge.buildEditedGeometryData();
         let editedBones = null;
         if (!built.error && built.exportedData?.["minecraft:geometry"]?.[0]?.bones) {
             const allBones = built.exportedData["minecraft:geometry"][0].bones;
             const filtered = allBones
                 .filter((b) => activeCosmetic.cosmeticBoneNames.has(b.name))
-                .map((b) => shiftBoneUv(b, -sx, -sy));
+                .map((b) => {
+                    const out = shiftBoneUv(b, -sx, -sy);
+                    if (rev.has(out.name)) out.name = rev.get(out.name);
+                    if (out.parent && rev.has(out.parent)) out.parent = rev.get(out.parent);
+                    return out;
+                });
             if (filtered.length > 0) {
                 editedBones = filtered;
             }
@@ -614,6 +654,16 @@ export function initCosmeticsStudio(bridge) {
         const finalBones = hasAnchor
             ? editedBones
             : [{ name: attach, pivot: [0, 0, 0] }, ...editedBones];
+        const validNames = new Set(finalBones.map((b) => b.name));
+        finalBones.forEach((b) => {
+            if (b.name.toLowerCase() === attach.toLowerCase()) {
+                b.name = attach;
+                return;
+            }
+            if (!b.parent || !validNames.has(b.parent)) {
+                b.parent = attach;
+            }
+        });
         return {
             format_version: "1.12.0",
             "minecraft:geometry": [
@@ -763,9 +813,9 @@ export function initCosmeticsStudio(bridge) {
 
     categorySelect?.addEventListener("change", () => {
         activeCosmetic.category = categorySelect.value;
-        const defaultAttach = { Wing: "body", Cap: "head", Tail: "body", Tool: "rightArm" }[activeCosmetic.category];
+        const defaultAttach = { Wing: "jacket", Cap: "head", Tail: "jacket", Tool: "leftArm" }[activeCosmetic.category];
         if (!activeCosmetic.isExisting && attachSelect && defaultAttach) {
-            attachSelect.value = defaultAttach;
+            setAttachSelectValue(defaultAttach);
             activeCosmetic.attachmentBone = defaultAttach;
         }
         if (activeCosmetic.rawGeo) {

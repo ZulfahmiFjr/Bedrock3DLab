@@ -829,8 +829,15 @@ body {
 .studio-options-col {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     margin-top: 10px;
+}
+
+.studio-hint {
+    margin: 2px 0 4px;
+    font-size: 10px;
+    line-height: 1.35;
+    color: #9b9ba6;
 }
 
 #studioConnectBtn {

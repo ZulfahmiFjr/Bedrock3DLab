@@ -226,15 +226,20 @@
                             </select>
                         </label>
                         <label class="relay-field">
-                            <span>Attach Bone</span>
+                            <span>Posisi Tempel (Bone)</span>
                             <select id="studioAttachSelect" class="studio-select">
-                                <option value="body">body</option>
-                                <option value="head">head</option>
-                                <option value="rightArm">rightArm</option>
-                                <option value="leftArm">leftArm</option>
+                                <option value="jacket">Punggung / Badan (jacket)</option>
+                                <option value="body">Badan Utama (body)</option>
+                                <option value="head">Kepala (head)</option>
+                                <option value="rightArm">Tangan Kanan (rightArm)</option>
+                                <option value="leftArm">Tangan Kiri (leftArm)</option>
+                                <option value="waist">Pinggang (waist)</option>
+                                <option value="rightLeg">Kaki Kanan (rightLeg)</option>
+                                <option value="leftLeg">Kaki Kiri (leftLeg)</option>
                             </select>
                         </label>
                     </div>
+                    <p class="studio-hint">Posisi Tempel = bagian tubuh player tempat kosmetik menempel &amp; ikut bergerak.</p>
                     <div class="studio-colors-header">
                         <span>Color Layers</span>
                         <div class="relay-section-actions">
@@ -246,12 +251,14 @@
                     <div class="studio-options-col">
                         <label class="relay-live-toggle">
                             <input id="studioOptimizeToggle" type="checkbox" checked />
-                            <span>Optimize 1x1x1 cubes (1.12.0 UV)</span>
+                            <span>Gabungkan cube 1x1x1 otomatis (lebih ringan)</span>
                         </label>
+                        <p class="studio-hint">Kompres ratusan cube kecil jadi lebih hemat tanpa mengubah bentuk model.</p>
                         <label class="relay-live-toggle">
                             <input id="studioBuildAssetsToggle" type="checkbox" checked />
-                            <span>Auto-render sprites, UI &amp; sync pack</span>
+                            <span>Perbarui pratinjau &amp; menu /cosmetics</span>
                         </label>
+                        <p class="studio-hint">Render ulang pratinjau 2D &amp; resource pack. Reconnect ke server agar nama &amp; pratinjau baru muncul di menu.</p>
                     </div>
                     <div class="relay-skin-actions">
                         <button id="studioPublishBtn" class="action-button" type="button" disabled>Publish &amp; Sync</button>
