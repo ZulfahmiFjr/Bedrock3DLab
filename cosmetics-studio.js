@@ -233,7 +233,6 @@ export function initCosmeticsStudio(bridge) {
     const colorLayersEl = document.getElementById("studioColorLayers");
     const addColorBtn = document.getElementById("studioAddColorBtn");
     const removeColorBtn = document.getElementById("studioRemoveColorBtn");
-    const optimizeToggle = document.getElementById("studioOptimizeToggle");
     const buildAssetsToggle = document.getElementById("studioBuildAssetsToggle");
     const publishBtn = document.getElementById("studioPublishBtn");
     const deleteBtn = document.getElementById("studioDeleteBtn");
@@ -737,7 +736,7 @@ export function initCosmeticsStudio(bridge) {
             textured: Boolean(activeCosmetic.partMapDataUrl),
             part_map_png: activeCosmetic.partMapDataUrl || undefined,
             texture_png: activeCosmetic.textureDataUrl || undefined,
-            optimize: Boolean(optimizeToggle ? optimizeToggle.checked : true),
+            optimize: false,
             build_assets: Boolean(buildAssetsToggle ? buildAssetsToggle.checked : true),
         };
 
